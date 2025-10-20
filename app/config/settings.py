@@ -3,6 +3,10 @@ import logging
 from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.utils.logging import setup_logging
+
+setup_logging()
+
 
 class Settings(BaseSettings):
     """Настройки проекта. Все поля обязательны, читаются из .env."""
