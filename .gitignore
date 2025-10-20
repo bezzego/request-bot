@@ -1,0 +1,115 @@
+# ========================================
+#  Python / Poetry project gitignore
+# ========================================
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Poetry ---
+poetry.lock
+# (оставляем, если хотим фиксированные зависимости, но в dev часто игнорим)
+# убери из игнора если хочешь фиксировать зависимости в CI/CD
+
+# --- Env files ---
+.env
+.env.*.local
+*.env
+.envrc
+
+# --- Logs and debug ---
+*.log
+logs/
+*.out
+*.err
+
+# --- Alembic migrations ---
+alembic.ini
+app/infrastructure/db/migrations/versions/*.pyc
+app/infrastructure/db/migrations/__pycache__/
+# (можно оставить папку migrations/, если хочешь коммитить сами миграции)
+
+# --- Database / local data ---
+*.db
+*.sqlite3
+instance/
+db.sqlite3
+*.bak
+*.sql
+
+# --- Reports and analytics ---
+*.xlsx
+*.xls
+*.csv
+*.pdf
+*.tmp
+*.bak
+*.log
+
+# --- Cache ---
+.cache/
+*.cache
+*.pytest_cache/
+.pytest_cache/
+__pypackages__/
+.mypy_cache/
+ruff_cache/
+.dmypy.json
+.pyre/
+.coverage
+coverage.xml
+htmlcov/
+
+# --- IDE files ---
+.vscode/
+.idea/
+*.iml
+*.sublime-workspace
+*.sublime-project
+
+# --- System files ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# --- Build / Dist ---
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# --- Test artifacts ---
+tests/__pycache__/
+tests/.pytest_cache/
+.tox/
+.nox/
+.pytest_cache/
+coverage/
+htmlcov/
+junit.xml
+
+# --- Docker ---
+docker-compose.override.yml
+*.pid
+
+# --- Temp folders ---
+tmp/
+temp/
+__temp__/
+uploads/
+
+# --- Local dev stuff ---
+notes.md
+*.secret
+*.old
+*.backup
+
+# ========================================
+# end
+# ========================================
