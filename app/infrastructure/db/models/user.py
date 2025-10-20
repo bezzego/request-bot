@@ -46,6 +46,16 @@ class User(Base):
         back_populates="master",
         foreign_keys="Request.master_id",
     )
+    work_sessions: Mapped[list["WorkSession"]] = relationship(
+        "WorkSession",
+        back_populates="master",
+        foreign_keys="WorkSession.master_id",
+    )
+    stage_changes: Mapped[list["RequestStageHistory"]] = relationship(
+        "RequestStageHistory",
+        back_populates="changed_by",
+        foreign_keys="RequestStageHistory.changed_by_id",
+    )
 
     # --- профили ролей ---
     specialist_profile = relationship("Specialist", back_populates="user", uselist=False)

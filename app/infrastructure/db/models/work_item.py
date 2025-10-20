@@ -1,7 +1,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import DateTime, Float, ForeignKey, String
+from sqlalchemy import DateTime, Float, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.db.models import Base
@@ -21,14 +21,21 @@ class WorkItem(Base):
 
     # описание позиции
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     # плановые показатели
+    planned_quantity: Mapped[float | None] = mapped_column(Float, nullable=True)
     planned_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
     planned_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    planned_material_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # фактические показатели
+    actual_quantity: Mapped[float | None] = mapped_column(Float, nullable=True)
     actual_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
     actual_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    actual_material_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # дата создания и обновления
     created_at: Mapped[datetime] = mapped_column(
@@ -45,6 +52,6 @@ class WorkItem(Base):
 
     def __repr__(self) -> str:
         return (
-            f"<WorkItem id={self.id} name={self.name!r} "
+            f"<WorkItem id={self.id} name={self.name!r} category={self.category!r} "
             f"planned={self.planned_hours}h fact={self.actual_hours}h>"
         )

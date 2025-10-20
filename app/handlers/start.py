@@ -3,6 +3,7 @@ from aiogram.types import Message
 from sqlalchemy import select
 
 from app.infrastructure.db.models.user import User, UserRole
+from app.services.user_service import UserRoleService
 from app.infrastructure.db.session import async_session
 from app.keyboards import client_kb, engineer_kb, manager_kb, master_kb, specialist_kb
 
@@ -27,6 +28,8 @@ async def start_handler(message: Message):
                 role=UserRole.CLIENT,  # по умолчанию клиент
             )
             session.add(user)
+            await session.flush()
+            await UserRoleService.ensure_profile(session, user)
             await session.commit()
             await message.answer(
                 f"👋 Привет, {full_name}!\n\n"
@@ -36,6 +39,8 @@ async def start_handler(message: Message):
             )
             print(f"[+] Новый пользователь: {full_name} ({telegram_id}) — роль CLIENT")
             return
+
+        await UserRoleService.ensure_profile(session, user)
 
         # Если пользователь уже есть — подгружаем клавиатуру по роли
         role_keyboards = {

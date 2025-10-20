@@ -4,6 +4,7 @@ from sqlalchemy import select
 
 from app.infrastructure.db.models.user import User, UserRole
 from app.infrastructure.db.session import async_session
+from app.services.user_service import UserRoleService
 
 router = Router()
 
@@ -22,6 +23,11 @@ admin_kb = ReplyKeyboardMarkup(
 async def list_users(message: Message):
     """Показывает всех пользователей бота"""
     async with async_session() as session:
+        manager = await session.scalar(select(User).where(User.telegram_id == message.from_user.id))
+        if not manager or manager.role != UserRole.MANAGER:
+            await message.answer("⚠️ Доступ только для руководителей.")
+            return
+
         result = await session.execute(select(User))
         users = result.scalars().all()
 
@@ -40,6 +46,12 @@ async def list_users(message: Message):
 
 @router.message(F.text == "🛠 Назначить роль")
 async def start_assign_role(message: Message):
+    async with async_session() as session:
+        manager = await session.scalar(select(User).where(User.telegram_id == message.from_user.id))
+        if not manager or manager.role != UserRole.MANAGER:
+            await message.answer("⚠️ Доступ только для руководителей.")
+            return
+
     await message.answer(
         "Введите Telegram ID пользователя, которому хотите изменить роль.\n"
         "Формат: <code>/setrole [telegram_id] [роль]</code>\n\n"
@@ -72,13 +84,18 @@ async def assign_role(message: Message):
         return
 
     async with async_session() as session:
+        manager = await session.scalar(select(User).where(User.telegram_id == message.from_user.id))
+        if not manager or manager.role != UserRole.MANAGER:
+            await message.answer("⚠️ Доступ только для руководителей.")
+            return
+
         user = await session.scalar(select(User).where(User.telegram_id == int(telegram_id)))
         if not user:
             await message.answer(f"❌ Пользователь с ID {telegram_id} не найден.")
             return
 
         old_role = user.role
-        user.role = new_role
+        await UserRoleService.assign_role(session, user, new_role)
         await session.commit()
 
         await message.answer(
