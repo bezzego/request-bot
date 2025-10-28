@@ -9,7 +9,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.infrastructure.db.models import Request, RequestReminder
+from app.infrastructure.db.models import Request, RequestReminder, RequestStatus
 from app.infrastructure.db.session import async_session
 
 
@@ -20,7 +20,16 @@ class ReminderService:
     async def get_due_reminders(session: AsyncSession, now: datetime) -> list[RequestReminder]:
         stmt = (
             select(RequestReminder)
-            .options(selectinload(RequestReminder.request).selectinload(Request.specialist))
+            .options(
+                selectinload(RequestReminder.request)
+                .selectinload(Request.specialist),
+                selectinload(RequestReminder.request)
+                .selectinload(Request.engineer),
+                selectinload(RequestReminder.request)
+                .selectinload(Request.master),
+                selectinload(RequestReminder.request)
+                .selectinload(Request.object),
+            )
             .where(
                 RequestReminder.is_sent.is_(False),
                 RequestReminder.scheduled_at <= now,
@@ -33,6 +42,7 @@ class ReminderService:
     @staticmethod
     def build_message(reminder: RequestReminder) -> str:
         request = reminder.request
+        status_title = STATUS_TITLES.get(request.status, request.status.value)
         if reminder.reminder_type.name == "INSPECTION":
             return (
                 f"🔔 Напоминание об осмотре по заявке {request.number}\n"
@@ -43,17 +53,22 @@ class ReminderService:
         if reminder.reminder_type.name == "DOCUMENT_SIGN":
             return (
                 f"📝 Требуется подписать акт по заявке {request.number}.\n"
-                f"Ответственный инженер: {request.engineer.full_name if request.engineer else '—'}."
+                f"Текущий статус: {status_title}. Подтвердите документы и уведомите заказчика."
             )
         if reminder.reminder_type.name == "DEADLINE":
             return (
                 f"⏰ Срок выполнения по заявке {request.number} истекает "
-                f"{reminder.scheduled_at:%d.%m.%Y %H:%M}."
+                f"{reminder.scheduled_at:%d.%m.%Y %H:%M}. Проверьте готовность и обновите отчёт."
             )
         if reminder.reminder_type.name == "OVERDUE":
             return (
-                f"⚠️ Заявка {request.number} просрочена. "
-                f"Свяжитесь с мастером {request.master.full_name if request.master else '—'}."
+                f"⚠️ Заявка {request.number} просрочена! Текущий статус: {status_title}.\n"
+                f"Свяжитесь с мастером {request.master.full_name if request.master else '—'} и обновите план."
+            )
+        if reminder.reminder_type.name == "REPORT":
+            return (
+                f"📊 Контроль заявки {request.number}.\n"
+                f"Статус: {status_title}. Обновите фактические данные и отправьте отчёт, если требуется."
             )
         return f"Напоминание по заявке {request.number}."
 
@@ -120,3 +135,16 @@ class ReminderScheduler:
                 pass
 
             await asyncio.sleep(self.interval_seconds)
+
+
+STATUS_TITLES = {
+    RequestStatus.NEW: "Новая",
+    RequestStatus.INSPECTION_SCHEDULED: "Назначен осмотр",
+    RequestStatus.INSPECTED: "Осмотр выполнен",
+    RequestStatus.ASSIGNED: "Назначен мастер",
+    RequestStatus.IN_PROGRESS: "В работе",
+    RequestStatus.COMPLETED: "Работы завершены",
+    RequestStatus.READY_FOR_SIGN: "Ожидает подписания",
+    RequestStatus.CLOSED: "Закрыта",
+    RequestStatus.CANCELLED: "Отменена",
+}

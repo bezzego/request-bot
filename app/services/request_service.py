@@ -18,6 +18,7 @@ from app.infrastructure.db.models import (
     RequestStageHistory,
     RequestStatus,
     User,
+    UserRole,
     WorkItem,
     WorkSession,
 )
@@ -125,14 +126,32 @@ class RequestService:
                 scheduled_at=data.inspection_datetime,
                 recipients=[data.engineer_id, data.specialist_id],
             )
+        else:
+            follow_up = datetime.now(timezone.utc) + timedelta(hours=4)
+            await RequestService._schedule_reminder(
+                session=session,
+                request=request,
+                reminder_type=ReminderType.REPORT,
+                scheduled_at=follow_up,
+                recipients=[data.engineer_id, data.specialist_id],
+            )
 
         if due_at:
+            manager_ids = await RequestService._get_manager_ids(session)
+            recipients = [data.engineer_id, data.specialist_id, *(manager_ids or [])]
             await RequestService._schedule_reminder(
                 session=session,
                 request=request,
                 reminder_type=ReminderType.DEADLINE,
                 scheduled_at=due_at,
-                recipients=[data.engineer_id, data.specialist_id],
+                recipients=recipients,
+            )
+            await RequestService._schedule_reminder(
+                session=session,
+                request=request,
+                reminder_type=ReminderType.OVERDUE,
+                scheduled_at=due_at + timedelta(days=1),
+                recipients=recipients,
             )
 
         return request
@@ -173,6 +192,15 @@ class RequestService:
                 recipients=[engineer_id, request.specialist_id],
                 replace_existing=True,
             )
+            follow_up = request.inspection_scheduled_at + timedelta(hours=2)
+            await RequestService._schedule_reminder(
+                session=session,
+                request=request,
+                reminder_type=ReminderType.REPORT,
+                scheduled_at=follow_up,
+                recipients=[engineer_id, request.specialist_id],
+                replace_existing=False,
+            )
         return request
 
     @staticmethod
@@ -198,6 +226,14 @@ class RequestService:
             to_status=RequestStatus.INSPECTED,
             changed_by_id=engineer_id,
             comment="Инженер завершил осмотр",
+        )
+        follow_up = datetime.now(timezone.utc) + timedelta(hours=4)
+        await RequestService._schedule_reminder(
+            session=session,
+            request=request,
+            reminder_type=ReminderType.REPORT,
+            scheduled_at=follow_up,
+            recipients=[request.engineer_id, request.specialist_id],
         )
         return request
 
@@ -227,12 +263,14 @@ class RequestService:
         )
 
         if request.due_at:
+            manager_ids = await RequestService._get_manager_ids(session)
+            recipients = [master_id, request.engineer_id, request.specialist_id, *(manager_ids or [])]
             await RequestService._schedule_reminder(
                 session=session,
                 request=request,
                 reminder_type=ReminderType.DEADLINE,
                 scheduled_at=request.due_at,
-                recipients=[master_id, request.engineer_id or request.specialist_id],
+                recipients=recipients,
                 replace_existing=True,
             )
             await RequestService._schedule_reminder(
@@ -240,9 +278,17 @@ class RequestService:
                 request=request,
                 reminder_type=ReminderType.OVERDUE,
                 scheduled_at=request.due_at + timedelta(days=1),
-                recipients=[master_id, request.specialist_id],
+                recipients=recipients,
                 replace_existing=True,
             )
+        follow_up = datetime.now(timezone.utc) + timedelta(hours=12)
+        await RequestService._schedule_reminder(
+            session=session,
+            request=request,
+            reminder_type=ReminderType.REPORT,
+            scheduled_at=follow_up,
+            recipients=[master_id, request.engineer_id],
+        )
         return request
 
     @staticmethod
@@ -281,6 +327,14 @@ class RequestService:
             to_status=RequestStatus.IN_PROGRESS,
             changed_by_id=master_id,
             comment="Мастер приступил к работам",
+        )
+        follow_up = started_at + timedelta(hours=24)
+        await RequestService._schedule_reminder(
+            session=session,
+            request=request,
+            reminder_type=ReminderType.REPORT,
+            scheduled_at=follow_up,
+            recipients=[master_id, request.engineer_id],
         )
         return work_session
 
@@ -340,6 +394,25 @@ class RequestService:
         )
 
         await RequestService._recalculate_hours(session, request)
+
+        sign_at = finished_at + timedelta(hours=2)
+        manager_ids = await RequestService._get_manager_ids(session)
+        recipients = [request.engineer_id, request.specialist_id, *(manager_ids or [])]
+        await RequestService._schedule_reminder(
+            session=session,
+            request=request,
+            reminder_type=ReminderType.DOCUMENT_SIGN,
+            scheduled_at=sign_at,
+            recipients=recipients,
+            replace_existing=True,
+        )
+        await RequestService._schedule_reminder(
+            session=session,
+            request=request,
+            reminder_type=ReminderType.REPORT,
+            scheduled_at=finished_at + timedelta(hours=6),
+            recipients=recipients,
+        )
         return work_session
 
     @staticmethod
@@ -363,12 +436,14 @@ class RequestService:
         )
 
         reminder_at = datetime.now(timezone.utc) + timedelta(hours=4)
+        manager_ids = await RequestService._get_manager_ids(session)
+        recipients = [request.engineer_id, request.specialist_id, *(manager_ids or [])]
         await RequestService._schedule_reminder(
             session=session,
             request=request,
             reminder_type=ReminderType.DOCUMENT_SIGN,
             scheduled_at=reminder_at,
-            recipients=[request.engineer_id or request.specialist_id],
+            recipients=recipients,
             replace_existing=True,
         )
         return request
@@ -531,26 +606,37 @@ class RequestService:
         replace_existing: bool = False,
     ) -> RequestReminder:
         """Создаёт запись напоминания. При replace_existing удаляет прошлые."""
-        recipients_list = [r for r in recipients if r]
-        if not recipients_list:
+        recipient_ids = [int(r) for r in recipients if r]
+        if not recipient_ids:
             raise ValueError("Не удалось определить получателей напоминания")
 
         if replace_existing:
             await session.execute(
-                select(RequestReminder)
-                .where(
+                delete(RequestReminder).where(
                     RequestReminder.request_id == request.id,
                     RequestReminder.reminder_type == reminder_type,
                     RequestReminder.is_sent.is_(False),
                 )
-                .execution_options(synchronize_session="fetch")
             )
+
+        rows = await session.execute(
+            select(User.id, User.telegram_id).where(User.id.in_(recipient_ids))
+        )
+        id_to_telegram = {row.id: row.telegram_id for row in rows if row.telegram_id}
+
+        telegram_ids: set[int] = set()
+        for recipient in recipient_ids:
+            telegram_id = id_to_telegram.get(recipient)
+            if telegram_id:
+                telegram_ids.add(int(telegram_id))
+            else:
+                telegram_ids.add(recipient)
 
         reminder = RequestReminder(
             request_id=request.id,
             reminder_type=reminder_type,
             scheduled_at=scheduled_at,
-            recipients=",".join(str(r) for r in recipients_list),
+            recipients=",".join(str(r) for r in telegram_ids),
         )
         session.add(reminder)
         await session.flush()
@@ -630,9 +716,15 @@ class RequestService:
 
     @staticmethod
     def _calculate_due_date(start: datetime | None, remedy_term_days: int) -> datetime | None:
-        if not start:
-            return None
-        return start + timedelta(days=remedy_term_days)
+        baseline = start or datetime.now(timezone.utc)
+        return baseline + timedelta(days=remedy_term_days)
+
+    @staticmethod
+    async def _get_manager_ids(session: AsyncSession) -> list[int]:
+        rows = await session.execute(
+            select(User.id).where(User.role == UserRole.MANAGER)
+        )
+        return list(rows.scalars().all())
 
 
 async def load_request(session: AsyncSession, request_number: str) -> Request | None:

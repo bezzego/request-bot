@@ -1,43 +1,133 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
-from aiogram.filters import Command
-from aiogram.types import FSInputFile, Message
+from aiogram.types import CallbackQuery, FSInputFile, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.handlers.admin import admin_kb
 from app.infrastructure.db.models import Request, RequestStatus, User, UserRole
 from app.infrastructure.db.session import async_session
 from app.services.export import ExportService
 from app.services.reporting import ReportingService
-
+from app.services.user_service import UserRoleService
 
 router = Router()
 
 
-async def _get_manager(session, telegram_id: int) -> User | None:
-    return await session.scalar(
-        select(User).where(User.telegram_id == telegram_id, User.role == UserRole.MANAGER)
-    )
-
-
 @router.message(F.text == "👥 Управление пользователями")
-async def handle_admin_menu(message: Message):
+async def manager_users(message: Message):
     async with async_session() as session:
         manager = await _get_manager(session, message.from_user.id)
         if not manager:
             await message.answer("Доступно только руководителям.")
             return
-    await message.answer("Выберите действие:", reply_markup=admin_kb)
+
+        users = (
+            (
+                await session.execute(
+                    select(User).order_by(User.created_at.desc()).limit(30)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    if not users:
+        await message.answer("Пока нет зарегистрированных пользователей.")
+        return
+
+    builder = InlineKeyboardBuilder()
+    for user in users:
+        builder.button(
+            text=f"{user.full_name} · {user.role}",
+            callback_data=f"manager:role:{user.id}",
+        )
+    builder.adjust(1)
+
+    await message.answer(
+        "Выберите пользователя, чтобы изменить роль или посмотреть данные.",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@router.callback_query(F.data.startswith("manager:role:"))
+async def manager_pick_role(callback: CallbackQuery):
+    user_id = int(callback.data.split(":")[2])
+
+    async with async_session() as session:
+        manager = await _get_manager(session, callback.from_user.id)
+        if not manager:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+
+        user = await session.scalar(select(User).where(User.id == user_id))
+        if not user:
+            await callback.answer("Пользователь не найден.", show_alert=True)
+            return
+
+    builder = InlineKeyboardBuilder()
+    for role in UserRole:
+        builder.button(
+            text=role.value,
+            callback_data=f"manager:set_role:{user_id}:{role.value}",
+        )
+    builder.button(text="Отмена", callback_data="manager:cancel_role")
+    builder.adjust(2)
+
+    await callback.message.answer(
+        f"Текущая роль пользователя {user.full_name}: {user.role}\nВыберите новую роль:",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "manager:cancel_role")
+async def manager_cancel_role(callback: CallbackQuery):
+    await callback.answer("Изменение роли отменено.")
+    await callback.message.delete()
+
+
+@router.callback_query(F.data.startswith("manager:set_role:"))
+async def manager_set_role(callback: CallbackQuery):
+    _, _, user_id_str, role_value = callback.data.split(":")
+    user_id = int(user_id_str)
+    try:
+        new_role = UserRole(role_value)
+    except ValueError:
+        await callback.answer("Некорректная роль.", show_alert=True)
+        return
+
+    async with async_session() as session:
+        manager = await _get_manager(session, callback.from_user.id)
+        if not manager:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+
+        user = await session.scalar(select(User).where(User.id == user_id))
+        if not user:
+            await callback.answer("Пользователь не найден.", show_alert=True)
+            return
+
+        old_role = user.role
+        await UserRoleService.assign_role(session, user, new_role)
+        await session.commit()
+
+    await callback.answer("Роль обновлена.")
+    await callback.message.edit_text(
+        f"Роль пользователя <b>{user.full_name}</b> изменена:\n"
+        f"{old_role.value} → {new_role.value}",
+        parse_mode="HTML",
+    )
 
 
 @router.message(F.text == "📊 Отчёты и статистика")
 async def manager_reports(message: Message):
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
     async with async_session() as session:
         manager = await _get_manager(session, message.from_user.id)
         if not manager:
@@ -58,13 +148,13 @@ async def manager_reports(message: Message):
         f"Отклонение бюджета: {summary.budget_delta:,.2f} ₽",
         f"Плановые часы: {summary.planned_hours:,.1f}",
         f"Фактические часы: {summary.actual_hours:,.1f}",
-        f"Среднее время на заявку: {summary.avg_hours_per_request:,.1f} ч",
         f"Закрыто в срок: {summary.closed_in_time} ( {summary.on_time_percent:.1f}% )",
         f"Просрочено: {summary.closed_overdue}",
         f"Среднее время выполнения: {summary.average_completion_time_hours:,.1f} ч",
         f"Общие затраты (750 ₽/ч): {summary.total_costs:,.2f} ₽",
         f"Индекс эффективности: {summary.efficiency_percent:.1f}%",
-        f"Средние оценки клиентов: качество {feedback['quality']:.1f}, сроки {feedback['time']:.1f}, культура {feedback['culture']:.1f}",
+        f"Средние оценки клиентов: качество {feedback['quality']:.1f}, "
+        f"сроки {feedback['time']:.1f}, культура {feedback['culture']:.1f}",
     ]
 
     if rating:
@@ -75,53 +165,95 @@ async def manager_reports(message: Message):
                 f"эффективность {engineer.efficiency_percent:.1f}%"
             )
     else:
-        lines.append("\nНет закрытых заявок за период для расчёта рейтинга.")
+        lines.append("\nПока нет закрытых заявок для формирования рейтинга.")
 
-    lines.append("\nИспользуйте команду /export_requests для выгрузки CSV.")
     await message.answer("\n".join(lines))
 
 
 @router.message(F.text == "📋 Все заявки")
-async def show_recent_requests(message: Message):
+async def manager_all_requests(message: Message):
     async with async_session() as session:
         manager = await _get_manager(session, message.from_user.id)
         if not manager:
-            await message.answer("Доступно только руководителям.")
+            await message.answer("Доступ ограничен.")
             return
 
-        stmt = (
-            select(Request)
-            .options(selectinload(Request.engineer))
-            .order_by(Request.created_at.desc())
-            .limit(10)
-        )
-        requests = (await session.execute(stmt)).scalars().all()
-
-        if not requests:
-            await message.answer("Заявки ещё не созданы.")
-            return
-
-        lines = ["📋 <b>Последние 10 заявок:</b>"]
-        for req in requests:
-            lines.append(
-                f"#{req.number} — {req.title}\n"
-                f"Статус: {req.status.value} | Инженер: {req.engineer.full_name if req.engineer else '—'}"
+        requests = (
+            (
+                await session.execute(
+                    select(Request)
+                    .options(
+                        selectinload(Request.specialist),
+                        selectinload(Request.engineer),
+                        selectinload(Request.master),
+                    )
+                    .order_by(Request.created_at.desc())
+                    .limit(20)
+                )
             )
+            .scalars()
+            .all()
+        )
 
-    await message.answer("\n\n".join(lines))
+    if not requests:
+        await message.answer("Нет заявок в системе.")
+        return
+
+    lines = ["📋 <b>Последние 20 заявок</b>"]
+    for req in requests:
+        lines.append(
+            f"#{req.number} · {req.title}\n"
+            f"Статус: {req.status.value}\n"
+            f"Специалист: {req.specialist.full_name if req.specialist else '—'}\n"
+            f"Инженер: {req.engineer.full_name if req.engineer else '—'}\n"
+            f"Мастер: {req.master.full_name if req.master else '—'}\n"
+        )
+
+    await message.answer("\n".join(lines))
 
 
-@router.message(Command("export_requests"))
-async def export_requests(message: Message):
-    now = datetime.now()
-    start = now - timedelta(days=30)
+@router.message(F.text == "📤 Экспорт CSV")
+async def manager_export_prompt(message: Message):
+    builder = InlineKeyboardBuilder()
+    for days in (30, 90, 180):
+        builder.button(text=f"За {days} дней", callback_data=f"manager:export:{days}")
+    builder.button(text="Отмена", callback_data="manager:export_cancel")
+    builder.adjust(1)
+
+    await message.answer("Выберите период для выгрузки заявок:", reply_markup=builder.as_markup())
+
+
+@router.callback_query(F.data == "manager:export_cancel")
+async def manager_export_cancel(callback: CallbackQuery):
+    await callback.answer("Выгрузка отменена.")
+    await callback.message.delete()
+
+
+@router.callback_query(F.data.startswith("manager:export:"))
+async def manager_export(callback: CallbackQuery):
+    period_days = int(callback.data.split(":")[2])
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=period_days)
 
     async with async_session() as session:
-        manager = await _get_manager(session, message.from_user.id)
+        manager = await _get_manager(session, callback.from_user.id)
         if not manager:
-            await message.answer("Доступно только руководителям.")
+            await callback.answer("Нет доступа.", show_alert=True)
             return
 
-        path = await ExportService.export_requests(session, start=start, end=now)
+        path = await ExportService.export_requests(session, start=start, end=end)
 
-    await message.answer_document(FSInputFile(path), caption="Выгрузка заявок за последние 30 дней")
+    await callback.answer("Файл сформирован.")
+    await callback.message.answer_document(
+        FSInputFile(path),
+        caption=f"Выгрузка заявок за последние {period_days} дней",
+    )
+
+
+# --- служебные функции ---
+
+
+async def _get_manager(session, telegram_id: int) -> User | None:
+    return await session.scalar(
+        select(User).where(User.telegram_id == telegram_id, User.role == UserRole.MANAGER)
+    )

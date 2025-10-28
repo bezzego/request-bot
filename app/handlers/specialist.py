@@ -1,22 +1,56 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.infrastructure.db.models import Request, RequestStatus, User, UserRole
+from app.infrastructure.db.models import DefectType, Request, RequestStatus, User, UserRole
 from app.infrastructure.db.session import async_session
 from app.services.request_service import RequestCreateData, RequestService
 
 
 router = Router()
+
+
+async def _get_specialist(session, telegram_id: int) -> User | None:
+    return await session.scalar(
+        select(User).where(
+            User.telegram_id == telegram_id,
+            User.role == UserRole.SPECIALIST,
+        )
+    )
+
+
+async def _get_defect_types(session) -> list[DefectType]:
+    return (
+        (
+            await session.execute(
+                select(DefectType).order_by(DefectType.name.asc()).limit(12)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+def _defect_type_keyboard(defect_types: list[DefectType]):
+    builder = InlineKeyboardBuilder()
+    for defect in defect_types:
+        builder.button(
+            text=defect.name,
+            callback_data=f"spec:defect:{defect.id}",
+        )
+    builder.button(text="✍️ Ввести вручную", callback_data="spec:defect:manual")
+    builder.adjust(2)
+    return builder.as_markup()
 
 
 class NewRequestStates(StatesGroup):
@@ -38,35 +72,112 @@ class NewRequestStates(StatesGroup):
 @router.message(F.text == "📄 Мои заявки")
 async def specialist_requests(message: Message):
     async with async_session() as session:
-        user = await session.scalar(select(User).where(User.telegram_id == message.from_user.id))
-        if not user or user.role != UserRole.SPECIALIST:
+        specialist = await _get_specialist(session, message.from_user.id)
+        if not specialist:
             await message.answer("Эта функция доступна только специалистам отдела.")
             return
 
-        stmt = (
-            select(Request)
-            .options(selectinload(Request.engineer), selectinload(Request.master))
-            .where(Request.specialist_id == user.id)
-            .order_by(Request.created_at.desc())
-            .limit(10)
-        )
-        requests = (await session.execute(stmt)).scalars().all()
+        requests = await _load_specialist_requests(session, specialist.id)
 
-        if not requests:
-            await message.answer("У вас пока нет заявок.")
+    if not requests:
+        await message.answer("У вас пока нет заявок. Создайте первую через «➕ Создать заявку».")
+        return
+
+    builder = InlineKeyboardBuilder()
+    for req in requests:
+        status = req.status.value
+        builder.button(
+            text=f"{req.number} · {status}",
+            callback_data=f"spec:detail:{req.id}",
+        )
+    builder.adjust(1)
+
+    await message.answer(
+        "Выберите заявку, чтобы посмотреть подробности и актуальный статус.",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@router.callback_query(F.data.startswith("spec:detail:"))
+async def specialist_request_detail(callback: CallbackQuery):
+    _, _, request_id_str = callback.data.split(":")
+    request_id = int(request_id_str)
+
+    async with async_session() as session:
+        specialist = await _get_specialist(session, callback.from_user.id)
+        if not specialist:
+            await callback.answer("Нет доступа к заявке.", show_alert=True)
             return
 
-        lines = ["📄 <b>Мои последние заявки:</b>"]
-        for req in requests:
-            status = req.status.value
-            engineer = req.engineer.full_name if req.engineer else "—"
-            master = req.master.full_name if req.master else "—"
-            lines.append(
-                f"#{req.number} — {req.title}\n"
-                f"Статус: {status} | Инженер: {engineer} | Мастер: {master}"
+        request = await session.scalar(
+            select(Request)
+            .options(
+                selectinload(Request.engineer),
+                selectinload(Request.master),
+                selectinload(Request.work_items),
+                selectinload(Request.photos),
+                selectinload(Request.acts),
+                selectinload(Request.feedback),
             )
+            .where(Request.id == request_id, Request.specialist_id == specialist.id)
+        )
 
-    await message.answer("\n\n".join(lines))
+    if not request:
+        await callback.message.edit_text("Заявка не найдена или была удалена.")
+        await callback.answer()
+        return
+
+    detail_text = _format_specialist_request_detail(request)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⬅️ Назад к списку", callback_data="spec:back")
+    builder.button(text="🔄 Обновить", callback_data=f"spec:detail:{request.id}")
+    builder.adjust(1)
+
+    await callback.message.edit_text(detail_text, reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "spec:back")
+async def specialist_back_to_list(callback: CallbackQuery):
+    async with async_session() as session:
+        specialist = await _get_specialist(session, callback.from_user.id)
+        if not specialist:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        requests = await _load_specialist_requests(session, specialist.id)
+
+    if not requests:
+        await callback.message.edit_text("У вас пока нет заявок. Создайте первую через «➕ Создать заявку».")
+        await callback.answer()
+        return
+
+    builder = InlineKeyboardBuilder()
+    for req in requests:
+        builder.button(text=f"{req.number} · {req.status.value}", callback_data=f"spec:detail:{req.id}")
+    builder.adjust(1)
+    await callback.message.edit_text(
+        "Выберите заявку, чтобы посмотреть подробности и актуальный статус.",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.message(F.text == "📊 Аналитика")
+async def specialist_analytics(message: Message):
+    async with async_session() as session:
+        specialist = await _get_specialist(session, message.from_user.id)
+        if not specialist:
+            await message.answer("Эта функция доступна только специалистам отдела.")
+            return
+
+        requests = await _load_specialist_requests(session, specialist.id)
+
+    if not requests:
+        await message.answer("Нет данных для аналитики. Создайте заявку, чтобы начать работу.")
+        return
+
+    summary_text = _build_specialist_analytics(requests)
+    await message.answer(summary_text)
 
 
 @router.message(F.text == "➕ Создать заявку")
@@ -137,7 +248,43 @@ async def handle_contract(message: Message, state: FSMContext):
     contract = message.text.strip()
     await state.update_data(contract_number=None if contract == "-" else contract)
     await state.set_state(NewRequestStates.defect_type)
-    await message.answer("Тип дефекта (например, «Трещины в стене»).")
+
+    async with async_session() as session:
+        defect_types = await _get_defect_types(session)
+
+    if defect_types:
+        await message.answer(
+            "Выберите тип дефекта из списка или введите свой текстом.",
+            reply_markup=_defect_type_keyboard(defect_types),
+        )
+    else:
+        await message.answer("Тип дефекта (например, «Трещины в стене»).")
+
+
+@router.callback_query(StateFilter(NewRequestStates.defect_type), F.data.startswith("spec:defect:"))
+async def handle_defect_type_choice(callback: CallbackQuery, state: FSMContext):
+    _, _, type_id = callback.data.split(":")
+    if type_id == "manual":
+        await callback.answer("Введите тип дефекта сообщением.")
+        return
+
+    defect_type_id = int(type_id)
+    async with async_session() as session:
+        defect = await session.scalar(select(DefectType).where(DefectType.id == defect_type_id))
+
+    if not defect:
+        await callback.answer("Тип не найден. Введите вручную.", show_alert=True)
+        return
+
+    await state.update_data(defect_type=defect.name)
+    await state.set_state(NewRequestStates.inspection_datetime)
+    await callback.message.edit_text(f"Тип дефекта: {defect.name}")
+    await callback.message.answer(
+        "Когда планируется комиссионный осмотр?\n"
+        "Формат: <code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n"
+        "Если время ещё не известно — отправьте «-»."
+    )
+    await callback.answer()
 
 
 @router.message(StateFilter(NewRequestStates.defect_type))
@@ -282,3 +429,190 @@ async def cancel_request(message: Message, state: FSMContext):
 @router.message(StateFilter(NewRequestStates.confirmation))
 async def confirmation_help(message: Message):
     await message.answer("Введите «Подтвердить» для сохранения или «Отмена» для отмены.")
+
+
+# --- вспомогательные функции ---
+
+STATUS_TITLES = {
+    RequestStatus.NEW: "Новая",
+    RequestStatus.INSPECTION_SCHEDULED: "Назначен осмотр",
+    RequestStatus.INSPECTED: "Осмотр выполнен",
+    RequestStatus.ASSIGNED: "Назначен мастер",
+    RequestStatus.IN_PROGRESS: "В работе",
+    RequestStatus.COMPLETED: "Работы завершены",
+    RequestStatus.READY_FOR_SIGN: "Ожидает подписания",
+    RequestStatus.CLOSED: "Закрыта",
+    RequestStatus.CANCELLED: "Отменена",
+}
+
+
+async def _load_specialist_requests(session, specialist_id: int) -> list[Request]:
+    return (
+        (
+            await session.execute(
+                select(Request)
+                .options(
+                    selectinload(Request.engineer),
+                    selectinload(Request.master),
+                    selectinload(Request.work_items),
+                )
+                .where(Request.specialist_id == specialist_id)
+                .order_by(Request.created_at.desc())
+                .limit(15)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+def _format_specialist_request_detail(request: Request) -> str:
+    status_title = STATUS_TITLES.get(request.status, request.status.value)
+    engineer = request.engineer.full_name if request.engineer else "—"
+    master = request.master.full_name if request.master else "—"
+    due_text = request.due_at.strftime("%d.%m.%Y %H:%M") if request.due_at else "не задан"
+    inspection_text = (
+        request.inspection_scheduled_at.strftime("%d.%m.%Y %H:%M")
+        if request.inspection_scheduled_at
+        else "не назначен"
+    )
+    inspection_done = (
+        request.inspection_completed_at.strftime("%d.%m.%Y %H:%M")
+        if request.inspection_completed_at
+        else "нет"
+    )
+
+    planned_budget = float(request.planned_budget or 0)
+    actual_budget = float(request.actual_budget or 0)
+    budget_delta = actual_budget - planned_budget
+
+    planned_hours = float(request.planned_hours or 0)
+    actual_hours = float(request.actual_hours or 0)
+    hours_delta = actual_hours - planned_hours
+
+    lines = [
+        f"📄 <b>{request.number}</b>",
+        f"Название: {request.title}",
+        f"Статус: {status_title}",
+        f"Инженер: {engineer}",
+        f"Мастер: {master}",
+        f"Осмотр: {inspection_text}",
+        f"Осмотр завершён: {inspection_done}",
+        f"Срок устранения: {due_text}",
+        f"Адрес: {request.address}",
+        f"Контакт: {request.contact_person} · {request.contact_phone}",
+        "",
+        f"Плановый бюджет: {_format_currency(planned_budget)} ₽",
+        f"Фактический бюджет: {_format_currency(actual_budget)} ₽",
+        f"Δ Бюджет: {_format_currency(budget_delta)} ₽",
+        f"Плановые часы: {_format_hours(planned_hours)}",
+        f"Фактические часы: {_format_hours(actual_hours)}",
+        f"Δ Часы: {_format_hours(hours_delta)}",
+    ]
+
+    if request.contract:
+        lines.append(f"Договор: {request.contract.number}")
+    if request.defect_type:
+        lines.append(f"Тип дефекта: {request.defect_type.name}")
+    if request.inspection_location:
+        lines.append(f"Место осмотра: {request.inspection_location}")
+
+    if request.work_items:
+        lines.append("")
+        lines.append("📦 <b>Позиции бюджета</b>")
+        for item in request.work_items:
+            lines.append(
+                f"• {item.name} — план {_format_currency(item.planned_cost)} ₽ / "
+                f"факт {_format_currency(item.actual_cost)} ₽"
+            )
+            if item.notes:
+                lines.append(f"  → {item.notes}")
+
+    if request.acts:
+        lines.append("")
+        lines.append(f"📝 Загружено актов: {len(request.acts)}")
+    if request.photos:
+        lines.append(f"📷 Фотоотчётов: {len(request.photos)}")
+    if request.feedback:
+        fb = request.feedback[-1]
+        lines.append(
+            f"⭐️ Отзыв: качество {fb.rating_quality or '—'}, сроки {fb.rating_time or '—'}, культура {fb.rating_culture or '—'}"
+        )
+        if fb.comment:
+            lines.append(f"«{fb.comment}»")
+
+    lines.append("")
+    lines.append("Поддерживайте актуальные статусы и бюджеты, чтобы команда видела прогресс.")
+    return "\n".join(lines)
+
+
+def _format_currency(value: float | None) -> str:
+    if value is None:
+        return "0.00"
+    return f"{float(value):,.2f}".replace(",", " ")
+
+
+def _format_hours(value: float | None) -> str:
+    if value is None:
+        return "0.0 ч"
+    return f"{float(value):.1f} ч"
+
+
+def _build_specialist_analytics(requests: list[Request]) -> str:
+    from collections import Counter
+
+    now = datetime.now(timezone.utc)
+    status_counter = Counter(req.status for req in requests)
+    total = len(requests)
+    active = sum(1 for req in requests if req.status not in {RequestStatus.CLOSED, RequestStatus.CANCELLED})
+    overdue = sum(
+        1
+        for req in requests
+        if req.due_at and req.due_at < now and req.status not in {RequestStatus.CLOSED, RequestStatus.CANCELLED}
+    )
+    closed = status_counter.get(RequestStatus.CLOSED, 0)
+
+    planned_budget = float(sum(req.planned_budget or 0 for req in requests))
+    actual_budget = float(sum(req.actual_budget or 0 for req in requests))
+    planned_hours = float(sum(req.planned_hours or 0 for req in requests))
+    actual_hours = float(sum(req.actual_hours or 0 for req in requests))
+
+    durations = []
+    for req in requests:
+        if req.work_started_at and req.work_completed_at:
+            durations.append((req.work_completed_at - req.work_started_at).total_seconds() / 3600)
+    avg_duration = sum(durations) / len(durations) if durations else 0
+
+    lines = [
+        "📊 <b>Аналитика по вашим заявкам</b>",
+        f"Всего заявок: {total}",
+        f"Активные: {active}",
+        f"Закрытые: {closed}",
+        f"Просроченные: {overdue}",
+        "",
+        f"Плановый бюджет суммарно: {_format_currency(planned_budget)} ₽",
+        f"Фактический бюджет суммарно: {_format_currency(actual_budget)} ₽",
+        f"Δ Бюджет: {_format_currency(actual_budget - planned_budget)} ₽",
+        f"Плановые часы суммарно: {_format_hours(planned_hours)}",
+        f"Фактические часы суммарно: {_format_hours(actual_hours)}",
+        f"Средняя длительность закрытой заявки: {_format_hours(avg_duration)}",
+    ]
+
+    if status_counter:
+        lines.append("")
+        lines.append("Статусы:")
+        for status, count in status_counter.most_common():
+            lines.append(f"• {STATUS_TITLES.get(status, status.value)} — {count}")
+
+    upcoming = [
+        req
+        for req in requests
+        if req.due_at and req.status not in {RequestStatus.CLOSED, RequestStatus.CANCELLED} and 0 <= (req.due_at - now).total_seconds() <= 72 * 3600
+    ]
+    if upcoming:
+        lines.append("")
+        lines.append("⚠️ Срок закрытия в ближайшие 72 часа:")
+        for req in upcoming:
+            lines.append(f"• {req.number} — до {req.due_at.strftime('%d.%m.%Y %H:%M')}")
+
+    return "\n".join(lines)
