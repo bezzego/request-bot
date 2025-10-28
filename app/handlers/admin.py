@@ -1,6 +1,7 @@
 from aiogram import F, Router
 from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.infrastructure.db.models.user import User, UserRole
 from app.infrastructure.db.session import async_session
@@ -19,13 +20,26 @@ admin_kb = ReplyKeyboardMarkup(
 )
 
 
+def _is_super_admin(user: User | None) -> bool:
+    return (
+        user is not None
+        and user.role == UserRole.MANAGER
+        and user.leader_profile is not None
+        and user.leader_profile.is_super_admin
+    )
+
+
 @router.message(F.text == "👥 Список пользователей")
 async def list_users(message: Message):
     """Показывает всех пользователей бота"""
     async with async_session() as session:
-        manager = await session.scalar(select(User).where(User.telegram_id == message.from_user.id))
-        if not manager or manager.role != UserRole.MANAGER:
-            await message.answer("⚠️ Доступ только для руководителей.")
+        manager = await session.scalar(
+            select(User)
+            .options(selectinload(User.leader_profile))
+            .where(User.telegram_id == message.from_user.id)
+        )
+        if not _is_super_admin(manager):
+            await message.answer("⚠️ Доступ только для супер-администраторов.")
             return
 
         result = await session.execute(select(User))
@@ -47,9 +61,13 @@ async def list_users(message: Message):
 @router.message(F.text == "🛠 Назначить роль")
 async def start_assign_role(message: Message):
     async with async_session() as session:
-        manager = await session.scalar(select(User).where(User.telegram_id == message.from_user.id))
-        if not manager or manager.role != UserRole.MANAGER:
-            await message.answer("⚠️ Доступ только для руководителей.")
+        manager = await session.scalar(
+            select(User)
+            .options(selectinload(User.leader_profile))
+            .where(User.telegram_id == message.from_user.id)
+        )
+        if not _is_super_admin(manager):
+            await message.answer("⚠️ Доступ только для супер-администраторов.")
             return
 
     await message.answer(
@@ -84,9 +102,13 @@ async def assign_role(message: Message):
         return
 
     async with async_session() as session:
-        manager = await session.scalar(select(User).where(User.telegram_id == message.from_user.id))
-        if not manager or manager.role != UserRole.MANAGER:
-            await message.answer("⚠️ Доступ только для руководителей.")
+        manager = await session.scalar(
+            select(User)
+            .options(selectinload(User.leader_profile))
+            .where(User.telegram_id == message.from_user.id)
+        )
+        if not _is_super_admin(manager):
+            await message.answer("⚠️ Доступ только для супер-администраторов.")
             return
 
         user = await session.scalar(select(User).where(User.telegram_id == int(telegram_id)))
