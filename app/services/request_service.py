@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -23,6 +24,7 @@ from app.infrastructure.db.models import (
     WorkSession,
 )
 from app.utils.identifiers import generate_request_number
+from app.services.work_catalog import WorkCatalogItem
 
 
 @dataclass(slots=True)
@@ -576,6 +578,101 @@ class RequestService:
         return work_item
 
     @staticmethod
+    async def update_actual_from_catalog(
+        session: AsyncSession,
+        request: Request,
+        *,
+        catalog_item: WorkCatalogItem,
+        actual_quantity: float,
+        author_id: int,
+    ) -> WorkItem:
+        stmt = select(WorkItem).where(
+            WorkItem.request_id == request.id,
+            func.lower(WorkItem.name) == catalog_item.name.lower(),
+        )
+        result = await session.execute(stmt)
+        work_item = result.scalars().first()
+
+        category_label = " / ".join(catalog_item.path[:-1]) or None
+
+        if not work_item:
+            work_item = WorkItem(
+                request_id=request.id,
+                name=catalog_item.name,
+                category=category_label,
+                unit=catalog_item.unit,
+                planned_quantity=None,
+                planned_hours=None,
+                planned_cost=None,
+                planned_material_cost=None,
+            )
+            session.add(work_item)
+
+        work_item.category = work_item.category or category_label
+        work_item.unit = catalog_item.unit or work_item.unit
+        work_item.actual_quantity = float(actual_quantity)
+        work_item.actual_cost = float(round(catalog_item.price * actual_quantity, 2))
+
+        await session.flush()
+        await RequestService._recalculate_budget(session, request)
+
+        await RequestService._register_stage(
+            session=session,
+            request=request,
+            to_status=request.status,
+            changed_by_id=author_id,
+            comment=f"Обновлены факты по каталогу «{catalog_item.name}»",
+        )
+        return work_item
+
+    @staticmethod
+    async def add_plan_from_catalog(
+        session: AsyncSession,
+        request: Request,
+        *,
+        catalog_item: WorkCatalogItem,
+        planned_quantity: float,
+        author_id: int,
+    ) -> WorkItem:
+        stmt = select(WorkItem).where(
+            WorkItem.request_id == request.id,
+            func.lower(WorkItem.name) == catalog_item.name.lower(),
+        )
+        result = await session.execute(stmt)
+        work_item = result.scalars().first()
+
+        category_label = " / ".join(catalog_item.path[:-1]) or None
+        planned_cost = float(round(catalog_item.price * planned_quantity, 2))
+
+        if not work_item:
+            work_item = WorkItem(
+                request_id=request.id,
+                name=catalog_item.name,
+                category=category_label,
+                unit=catalog_item.unit,
+                planned_quantity=float(planned_quantity),
+                planned_cost=planned_cost,
+            )
+            session.add(work_item)
+        else:
+            work_item.category = work_item.category or category_label
+            work_item.unit = catalog_item.unit or work_item.unit
+            work_item.planned_quantity = float(planned_quantity)
+            work_item.planned_cost = planned_cost
+
+        await session.flush()
+        await RequestService._recalculate_budget(session, request)
+
+        await RequestService._register_stage(
+            session=session,
+            request=request,
+            to_status=request.status,
+            changed_by_id=author_id,
+            comment=f"Обновлён план по каталогу «{catalog_item.name}»",
+        )
+        return work_item
+
+    @staticmethod
     async def _register_stage(
         session: AsyncSession,
         *,
@@ -704,15 +801,33 @@ class RequestService:
 
     @staticmethod
     async def _get_or_create_defect_type(session: AsyncSession, name: str) -> DefectType:
-        stmt = select(DefectType).where(func.lower(DefectType.name) == name.lower())
+        normalized = name.strip()
+        if not normalized:
+            raise ValueError("Название типа дефекта не задано")
+        stmt = select(DefectType).where(func.lower(DefectType.name) == normalized.lower())
         result = await session.execute(stmt)
         defect = result.scalars().first()
         if defect:
             return defect
-        defect = DefectType(name=name)
-        session.add(defect)
-        await session.flush()
-        return defect
+        insert_stmt = (
+            insert(DefectType)
+            .values(name=normalized)
+            .on_conflict_do_update(index_elements=[DefectType.name], set_={"name": normalized})
+            .returning(DefectType.id)
+        )
+        inserted = await session.execute(insert_stmt)
+        row = inserted.first()
+        if row and getattr(row, "id", None):
+            defect = await session.get(DefectType, row.id)
+            if defect:
+                return defect
+        result = await session.execute(
+            select(DefectType).where(func.lower(DefectType.name) == normalized.lower())
+        )
+        defect = result.scalars().first()
+        if defect:
+            return defect
+        raise RuntimeError("Не удалось сохранить тип дефекта.")
 
     @staticmethod
     def _calculate_due_date(start: datetime | None, remedy_term_days: int) -> datetime | None:

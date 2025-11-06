@@ -4,26 +4,48 @@ from datetime import datetime, timezone
 from typing import Sequence
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from app.infrastructure.db.models import Request, RequestStatus, User, UserRole, WorkItem
+from app.infrastructure.db.models import (
+    ActType,
+    Photo,
+    PhotoType,
+    Request,
+    RequestStatus,
+    User,
+    UserRole,
+    WorkItem,
+)
 from app.infrastructure.db.session import async_session
-from app.services.request_service import RequestService, WorkItemData
+from app.services.request_service import RequestService
+from app.services.work_catalog import get_work_catalog
+from app.handlers.common.work_fact_view import (
+    build_category_keyboard,
+    build_quantity_keyboard,
+    decode_quantity,
+    format_category_message,
+    format_quantity_message,
+)
 
 router = Router()
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class EngineerStates(StatesGroup):
     schedule_datetime = State()
-    inspection_comment = State()
-    budget_plan = State()
-    budget_fact = State()
+    # Состояния для завершения осмотра
+    inspection_waiting_photos = State()  # Ожидание отправки фото
+    inspection_waiting_comment = State()  # Ожидание комментария
+    inspection_final_confirm = State()  # Финальное подтверждение завершения осмотра
 
 
 STATUS_TITLES = {
@@ -68,7 +90,7 @@ async def engineer_requests(message: Message):
 
 
 @router.callback_query(F.data.startswith("eng:detail:"))
-async def engineer_request_detail(callback: CallbackQuery):
+async def engineer_request_detail(callback: CallbackQuery, state: FSMContext):
     request_id = int(callback.data.split(":")[2])
     async with async_session() as session:
         engineer = await _get_engineer(session, callback.from_user.id)
@@ -82,6 +104,10 @@ async def engineer_request_detail(callback: CallbackQuery):
         await callback.message.edit_text("Заявка не найдена или больше не закреплена за вами.")
         await callback.answer()
         return
+
+    # Save the last viewed request id into FSM so subsequent photos (even without
+    # captions) can be associated correctly when the user is working with this card.
+    await state.update_data(request_id=request.id)
 
     await _show_request_detail(callback.message, request, edit=True)
     await callback.answer()
@@ -180,32 +206,186 @@ async def engineer_schedule_datetime(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("eng:inspect:"))
 async def engineer_inspection(callback: CallbackQuery, state: FSMContext):
+    """Начало процесса завершения осмотра."""
     request_id = int(callback.data.split(":")[2])
-    await state.set_state(EngineerStates.inspection_comment)
-    await state.update_data(request_id=request_id)
-    await callback.message.answer("Добавьте комментарий по результатам осмотра (или отправьте «-»).")
+    
+    # Сохраняем request_id и очищаем временные данные
+    await state.set_state(EngineerStates.inspection_waiting_photos)
+    await state.update_data(
+        request_id=request_id,
+        photos=[],
+        photo_file_ids=[],
+    )
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="📷 Отправить фото",
+        callback_data=f"eng:inspection:start_photos:{request_id}",
+    )
+    builder.button(
+        text="❌ Отмена",
+        callback_data="eng:inspection:cancel",
+    )
+    builder.adjust(1)
+    
+    await callback.message.answer(
+        "Для завершения осмотра отправьте фото дефектов.\n"
+        "Нажмите кнопку «📷 Отправить фото», чтобы начать загрузку.",
+        reply_markup=builder.as_markup(),
+    )
     await callback.answer()
 
 
-@router.message(StateFilter(EngineerStates.inspection_comment))
-async def engineer_inspection_comment(message: Message, state: FSMContext):
+@router.callback_query(
+    StateFilter(EngineerStates.inspection_waiting_photos),
+    F.data.startswith("eng:inspection:start_photos:")
+)
+async def engineer_inspection_start_photos(callback: CallbackQuery, state: FSMContext):
+    """Начало загрузки фото."""
+    request_id = int(callback.data.split(":")[3])
+    
     data = await state.get_data()
-    request_id = data.get("request_id")
-    comment = None if message.text.strip() == "-" else message.text.strip()
+    if data.get("request_id") != request_id:
+        await callback.answer("Ошибка. Начните заново.", show_alert=True)
+        await state.clear()
+        return
 
+    await state.set_state(EngineerStates.inspection_waiting_photos)
+    await callback.message.edit_text(
+        "📷 Жду ваши фотографии.\n"
+        "Отправьте все необходимые фото дефектов. После отправки всех фото нажмите «✅ Подтвердить фото».",
+        reply_markup=_waiting_photos_keyboard(request_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(
+    StateFilter(EngineerStates.inspection_waiting_photos),
+    F.data.startswith("eng:inspection:confirm_photos:")
+)
+async def engineer_inspection_confirm_photos(callback: CallbackQuery, state: FSMContext):
+    """Подтверждение отправленных фото."""
+    request_id = int(callback.data.split(":")[3])
+    
+    data = await state.get_data()
+    if data.get("request_id") != request_id:
+        await callback.answer("Ошибка. Начните заново.", show_alert=True)
+        await state.clear()
+        return
+
+    photos = data.get("photos", [])
+    if not photos:
+        await callback.answer("Сначала отправьте хотя бы одно фото.", show_alert=True)
+        return
+
+    # Сохраняем фото в БД
     async with async_session() as session:
-        engineer = await _get_engineer(session, message.from_user.id)
+        engineer = await _get_engineer(session, callback.from_user.id)
         if not engineer:
-            await message.answer("Нет доступа.")
             await state.clear()
+            await callback.answer("Нет доступа.", show_alert=True)
             return
 
         request = await _load_request(session, engineer.id, request_id)
         if not request:
-            await message.answer("Заявка не найдена.")
             await state.clear()
+            await callback.answer("Заявка не найдена.", show_alert=True)
             return
 
+        # Сохраняем все фото
+        for photo_data in photos:
+            new_photo = Photo(
+                request_id=request.id,
+                type=PhotoType.BEFORE,
+                file_id=photo_data["file_id"],
+                caption=photo_data.get("caption"),
+            )
+            session.add(new_photo)
+        
+        await session.commit()
+        logger.info(
+            "Saved %s photos for request_id=%s user=%s",
+            len(photos),
+            request.id,
+            callback.from_user.id,
+        )
+    
+    # Переходим к вводу комментария
+    await state.set_state(EngineerStates.inspection_waiting_comment)
+    await callback.message.edit_text(
+        "✅ Фото сохранены.\n\n"
+        "Напишите комментарий к осмотру (или отправьте «-», если комментарий не требуется).",
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(EngineerStates.inspection_waiting_comment))
+async def engineer_inspection_comment(message: Message, state: FSMContext):
+    """Обработка комментария к осмотру."""
+    text = (message.text or "").strip()
+    
+    if text.lower() == "отмена":
+        await state.clear()
+        await message.answer("Действие отменено.")
+        return
+
+    if not text:
+        await message.answer("Введите комментарий или «-», либо отправьте «Отмена».")
+        return
+    
+    comment = None if text == "-" else text
+    data = await state.get_data()
+    request_id = data.get("request_id")
+    
+    await state.update_data(comment=comment)
+    await state.set_state(EngineerStates.inspection_final_confirm)
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="✅ Завершить осмотр",
+        callback_data=f"eng:inspection:final_confirm:{request_id}",
+    )
+    builder.button(
+        text="❌ Отмена",
+        callback_data="eng:inspection:cancel",
+    )
+    builder.adjust(1)
+    
+    await message.answer(
+        "Комментарий сохранён.\n\n"
+        "Нажмите «✅ Завершить осмотр», чтобы завершить процесс.",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@router.callback_query(
+    StateFilter(EngineerStates.inspection_final_confirm),
+    F.data.startswith("eng:inspection:final_confirm:")
+)
+async def engineer_inspection_final_confirm(callback: CallbackQuery, state: FSMContext):
+    """Финальное завершение осмотра."""
+    request_id = int(callback.data.split(":")[3])
+
+    data = await state.get_data()
+    if data.get("request_id") != request_id:
+        await callback.answer("Ошибка. Начните заново.", show_alert=True)
+        await state.clear()
+        return
+
+    async with async_session() as session:
+        engineer = await _get_engineer(session, callback.from_user.id)
+        if not engineer:
+            await state.clear()
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+
+        request = await _load_request(session, engineer.id, request_id)
+        if not request:
+            await state.clear()
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+
+        comment = data.get("comment")
         await RequestService.record_inspection(
             session,
             request,
@@ -215,148 +395,389 @@ async def engineer_inspection_comment(message: Message, state: FSMContext):
         )
         await session.commit()
 
-    await message.answer(f"Осмотр по заявке {request.number} отмечен как выполненный.")
     await state.clear()
-    await _refresh_request_detail(message.bot, message.chat.id, message.from_user.id, request_id)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await callback.answer("Осмотр завершён.")
+    await callback.message.answer(f"✅ Осмотр по заявке {request.number} отмечен как выполненный.")
+    await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
+
+
+@router.callback_query(F.data == "eng:inspection:cancel")
+async def engineer_inspection_cancel(callback: CallbackQuery, state: FSMContext):
+    """Отмена процесса завершения осмотра."""
+    await state.clear()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.answer("Действие отменено.")
+    await callback.message.answer("Действие отменено.")
 
 
 @router.callback_query(F.data.startswith("eng:add_plan:"))
-async def engineer_add_plan(callback: CallbackQuery, state: FSMContext):
+async def engineer_add_plan(callback: CallbackQuery):
     request_id = int(callback.data.split(":")[2])
-    await state.set_state(EngineerStates.budget_plan)
-    await state.update_data(request_id=request_id)
-    await callback.message.answer(
-        "Введите данные плановой позиции через «;»:\n"
-        "Название;Категория;Ед.;План кол-во;План часы;План стоимость;Материалы в руб.\n"
-        "Например: Окраска стен;Работы;м²;120;32;55000;8000"
-    )
-    await callback.answer()
-
-
-@router.message(StateFilter(EngineerStates.budget_plan))
-async def engineer_add_plan_data(message: Message, state: FSMContext):
-    if message.text.lower() == "отмена":
-        await state.clear()
-        await message.answer("Действие отменено.")
-        return
-
-    parts = [part.strip() for part in message.text.split(";")]
-    if len(parts) < 6:
-        await message.answer("Недостаточно данных. Укажите минимум 6 значений через «;».")
-        return
-
-    (name, category, unit, planned_qty, planned_hours, planned_cost, *rest) = parts
-    planned_material = rest[0] if rest else None
-
-    def _float(value: str | None) -> float | None:
-        if not value:
-            return None
-        return float(value.replace(",", "."))
-
-    item = WorkItemData(
-        name=name,
-        category=category or None,
-        unit=unit or None,
-        planned_quantity=_float(planned_qty),
-        planned_hours=_float(planned_hours),
-        planned_cost=_float(planned_cost),
-        planned_material_cost=_float(planned_material),
-    )
-
-    data = await state.get_data()
-    request_id = data.get("request_id")
-
     async with async_session() as session:
-        engineer = await _get_engineer(session, message.from_user.id)
+        engineer = await _get_engineer(session, callback.from_user.id)
         if not engineer:
-            await message.answer("Нет доступа.")
-            await state.clear()
+            await callback.answer("Нет доступа.", show_alert=True)
             return
 
         request = await _load_request(session, engineer.id, request_id)
         if not request:
-            await message.answer("Заявка не найдена.")
-            await state.clear()
+            await callback.answer("Заявка не найдена.", show_alert=True)
             return
 
-        await RequestService.add_work_item(session, request, item, author_id=engineer.id)
-        await session.commit()
+        header = _catalog_header(request)
 
-    await message.answer(f"Позиция «{item.name}» добавлена в план заявки {request.number}.")
-    await state.clear()
-    await _refresh_request_detail(message.bot, message.chat.id, message.from_user.id, request_id)
-
-
-@router.callback_query(F.data.startswith("eng:update_fact:"))
-async def engineer_update_fact(callback: CallbackQuery, state: FSMContext):
-    request_id = int(callback.data.split(":")[2])
-    await state.set_state(EngineerStates.budget_fact)
-    await state.update_data(request_id=request_id)
-    await callback.message.answer(
-        "Введите фактические данные через «;»:\n"
-        "Название;Факт кол-во;Факт часы;Факт стоимость;Материалы;Комментарий\n"
-        "Например: Окраска стен;118;30;53000;7500;Подкорректировали объём"
+    catalog = get_work_catalog()
+    text = f"{header}\n\n{format_category_message(None)}"
+    markup = build_category_keyboard(
+        catalog=catalog,
+        category=None,
+        role_key="ep",
+        request_id=request_id,
     )
+    await callback.message.answer(text, reply_markup=markup)
     await callback.answer()
 
 
-@router.message(StateFilter(EngineerStates.budget_fact))
-async def engineer_update_fact_data(message: Message, state: FSMContext):
-    if message.text.lower() == "отмена":
-        await state.clear()
-        await message.answer("Действие отменено.")
+@router.callback_query(F.data.startswith("work:ep:"))
+async def engineer_work_catalog_plan(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    if len(parts) < 4:
+        await callback.answer()
         return
 
-    parts = [part.strip() for part in message.text.split(";")]
-    if len(parts) < 5:
-        await message.answer("Недостаточно данных. Нужны минимум 5 значений через «;».")
+    _, role_key, request_id_str, action, *rest = parts
+    if role_key != "ep":
+        await callback.answer()
         return
 
-    name, actual_qty, actual_hours, actual_cost, actual_material, *comment = parts
+    try:
+        request_id = int(request_id_str)
+    except ValueError:
+        await callback.answer("Некорректный идентификатор заявки.", show_alert=True)
+        return
 
-    def _float(value: str | None) -> float | None:
-        if not value:
-            return None
-        return float(value.replace(",", "."))
-
-    comment_text = comment[0] if comment else None
-
-    data = await state.get_data()
-    request_id = data.get("request_id")
+    catalog = get_work_catalog()
 
     async with async_session() as session:
-        engineer = await _get_engineer(session, message.from_user.id)
+        engineer = await _get_engineer(session, callback.from_user.id)
         if not engineer:
-            await message.answer("Нет доступа.")
-            await state.clear()
+            await callback.answer("Нет доступа.", show_alert=True)
             return
 
         request = await _load_request(session, engineer.id, request_id)
         if not request:
-            await message.answer("Заявка не найдена.")
-            await state.clear()
+            await callback.answer("Заявка не найдена.", show_alert=True)
             return
 
-        try:
-            await RequestService.update_work_item_actual(
+        header = _catalog_header(request)
+
+        if action in {"browse", "back"}:
+            target = rest[0] if rest else "root"
+            category = None if target == "root" else catalog.get_category(target)
+            if target != "root" and not category:
+                await callback.answer("Категория недоступна.", show_alert=True)
+                return
+
+            text = f"{header}\n\n{format_category_message(category)}"
+            markup = build_category_keyboard(
+                catalog=catalog,
+                category=category,
+                role_key="ep",
+                request_id=request_id,
+            )
+            await _update_catalog_message(callback.message, text, markup)
+            await callback.answer()
+            return
+
+        if action == "item":
+            if not rest:
+                await callback.answer()
+                return
+            item_id = rest[0]
+            catalog_item = catalog.get_item(item_id)
+            if not catalog_item:
+                await callback.answer("Работа не найдена в каталоге.", show_alert=True)
+                return
+
+            work_item = await _get_work_item(session, request.id, catalog_item.name)
+            current_quantity = (
+                float(work_item.planned_quantity)
+                if work_item and work_item.planned_quantity is not None
+                else None
+            )
+            new_quantity = current_quantity or 1.0
+
+            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=current_quantity)}"
+            markup = build_quantity_keyboard(
+                catalog_item=catalog_item,
+                role_key="ep",
+                request_id=request_id,
+                new_quantity=new_quantity,
+            )
+            await _update_catalog_message(callback.message, text, markup)
+            await callback.answer()
+            return
+
+        if action == "qty":
+            if len(rest) < 2:
+                await callback.answer()
+                return
+            item_id, quantity_code = rest[:2]
+            catalog_item = catalog.get_item(item_id)
+            if not catalog_item:
+                await callback.answer("Работа не найдена в каталоге.", show_alert=True)
+                return
+
+            new_quantity = decode_quantity(quantity_code)
+            work_item = await _get_work_item(session, request.id, catalog_item.name)
+            current_quantity = (
+                float(work_item.planned_quantity)
+                if work_item and work_item.planned_quantity is not None
+                else None
+            )
+
+            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=current_quantity)}"
+            markup = build_quantity_keyboard(
+                catalog_item=catalog_item,
+                role_key="ep",
+                request_id=request_id,
+                new_quantity=new_quantity,
+            )
+            await _update_catalog_message(callback.message, text, markup)
+            await callback.answer()
+            return
+
+        if action == "save":
+            if len(rest) < 2:
+                await callback.answer()
+                return
+            item_id, quantity_code = rest[:2]
+            catalog_item = catalog.get_item(item_id)
+            if not catalog_item:
+                await callback.answer("Работа не найдена в каталоге.", show_alert=True)
+                return
+
+            new_quantity = decode_quantity(quantity_code)
+            await RequestService.add_plan_from_catalog(
                 session,
                 request,
-                name=name,
-                actual_quantity=_float(actual_qty),
-                actual_hours=_float(actual_hours),
-                actual_cost=_float(actual_cost),
-                actual_material_cost=_float(actual_material),
-                notes=comment_text,
+                catalog_item=catalog_item,
+                planned_quantity=new_quantity,
                 author_id=engineer.id,
             )
             await session.commit()
-        except ValueError as exc:
-            await message.answer(str(exc))
+
+            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=new_quantity)}"
+            markup = build_quantity_keyboard(
+                catalog_item=catalog_item,
+                role_key="ep",
+                request_id=request_id,
+                new_quantity=new_quantity,
+            )
+            await _update_catalog_message(callback.message, text, markup)
+            await callback.answer(f"План обновлён: {new_quantity:.2f}")
+
+            await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
             return
 
-    await message.answer(f"Фактические данные по «{name}» обновлены.")
-    await state.clear()
-    await _refresh_request_detail(message.bot, message.chat.id, message.from_user.id, request_id)
+        if action == "close":
+            try:
+                await callback.message.delete()
+            except Exception:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.answer()
+            return
+
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("eng:update_fact:"))
+async def engineer_update_fact(callback: CallbackQuery):
+    request_id = int(callback.data.split(":")[2])
+    async with async_session() as session:
+        engineer = await _get_engineer(session, callback.from_user.id)
+        if not engineer:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+
+        request = await _load_request(session, engineer.id, request_id)
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+
+        header = _catalog_header(request)
+
+    catalog = get_work_catalog()
+    text = f"{header}\n\n{format_category_message(None)}"
+    markup = build_category_keyboard(
+        catalog=catalog,
+        category=None,
+        role_key="e",
+        request_id=request_id,
+    )
+    await callback.message.answer(text, reply_markup=markup)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("work:e:"))
+async def engineer_work_catalog(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    if len(parts) < 4:
+        await callback.answer()
+        return
+
+    _, role_key, request_id_str, action, *rest = parts
+    if role_key != "e":
+        await callback.answer()
+        return
+
+    try:
+        request_id = int(request_id_str)
+    except ValueError:
+        await callback.answer("Некорректный идентификатор заявки.", show_alert=True)
+        return
+
+    catalog = get_work_catalog()
+
+    async with async_session() as session:
+        engineer = await _get_engineer(session, callback.from_user.id)
+        if not engineer:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+
+        request = await _load_request(session, engineer.id, request_id)
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+
+        header = _catalog_header(request)
+
+        if action in {"browse", "back"}:
+            target = rest[0] if rest else "root"
+            category = None if target == "root" else catalog.get_category(target)
+            if target != "root" and not category:
+                await callback.answer("Категория недоступна.", show_alert=True)
+                return
+
+            text = f"{header}\n\n{format_category_message(category)}"
+            markup = build_category_keyboard(
+                catalog=catalog,
+                category=category,
+                role_key="e",
+                request_id=request_id,
+            )
+            await _update_catalog_message(callback.message, text, markup)
+            await callback.answer()
+            return
+
+        if action == "item":
+            if not rest:
+                await callback.answer()
+                return
+            item_id = rest[0]
+            catalog_item = catalog.get_item(item_id)
+            if not catalog_item:
+                await callback.answer("Работа не найдена в каталоге.", show_alert=True)
+                return
+
+            work_item = await _get_work_item(session, request.id, catalog_item.name)
+            current_quantity = (
+                float(work_item.actual_quantity)
+                if work_item and work_item.actual_quantity is not None
+                else None
+            )
+            new_quantity = current_quantity or 0.0
+
+            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=current_quantity)}"
+            markup = build_quantity_keyboard(
+                catalog_item=catalog_item,
+                role_key="e",
+                request_id=request_id,
+                new_quantity=new_quantity,
+            )
+            await _update_catalog_message(callback.message, text, markup)
+            await callback.answer()
+            return
+
+        if action == "qty":
+            if len(rest) < 2:
+                await callback.answer()
+                return
+            item_id, quantity_code = rest[:2]
+            catalog_item = catalog.get_item(item_id)
+            if not catalog_item:
+                await callback.answer("Работа не найдена в каталоге.", show_alert=True)
+                return
+
+            new_quantity = decode_quantity(quantity_code)
+            work_item = await _get_work_item(session, request.id, catalog_item.name)
+            current_quantity = (
+                float(work_item.actual_quantity)
+                if work_item and work_item.actual_quantity is not None
+                else None
+            )
+
+            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=current_quantity)}"
+            markup = build_quantity_keyboard(
+                catalog_item=catalog_item,
+                role_key="e",
+                request_id=request_id,
+                new_quantity=new_quantity,
+            )
+            await _update_catalog_message(callback.message, text, markup)
+            await callback.answer()
+            return
+
+        if action == "save":
+            if len(rest) < 2:
+                await callback.answer()
+                return
+            item_id, quantity_code = rest[:2]
+            catalog_item = catalog.get_item(item_id)
+            if not catalog_item:
+                await callback.answer("Работа не найдена в каталоге.", show_alert=True)
+                return
+
+            new_quantity = decode_quantity(quantity_code)
+            await RequestService.update_actual_from_catalog(
+                session,
+                request,
+                catalog_item=catalog_item,
+                actual_quantity=new_quantity,
+                author_id=engineer.id,
+            )
+            await session.commit()
+
+            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=new_quantity)}"
+            markup = build_quantity_keyboard(
+                catalog_item=catalog_item,
+                role_key="e",
+                request_id=request_id,
+                new_quantity=new_quantity,
+            )
+            await _update_catalog_message(callback.message, text, markup)
+            await callback.answer(f"Факт обновлён: {new_quantity:.2f}")
+
+            await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
+            return
+
+        if action == "close":
+            try:
+                await callback.message.delete()
+            except Exception:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.answer()
+            return
+
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("eng:assign_master:"))
@@ -480,13 +901,128 @@ async def engineer_analytics(message: Message):
     await message.answer(summary)
 
 
+@router.message(StateFilter(EngineerStates.inspection_waiting_photos), F.photo)
+async def engineer_inspection_photo(message: Message, state: FSMContext):
+    """Обработка фото во время завершения осмотра."""
+    data = await state.get_data()
+    request_id = data.get("request_id")
+    
+    if not request_id:
+        await message.answer("Ошибка. Начните процесс заново.")
+        await state.clear()
+        return
+    
+    # Получаем фото
+    photo = message.photo[-1]
+    caption = (message.caption or "").strip() or None
+    
+    # Добавляем фото в список
+    photos = data.get("photos", [])
+    photos.append({
+        "file_id": photo.file_id,
+        "caption": caption,
+    })
+    
+    await state.update_data(photos=photos)
+    
+    photo_count = len(photos)
+    await message.answer(
+        f"✅ Фото {photo_count} получено.\n"
+        f"Отправлено фото: {photo_count}\n\n"
+        "Отправьте ещё фото или нажмите «✅ Подтвердить фото».",
+        reply_markup=_waiting_photos_keyboard(request_id),
+    )
+
+
+@router.message(StateFilter(EngineerStates.inspection_waiting_photos), F.document)
+async def engineer_inspection_document(message: Message, state: FSMContext):
+    """Обработка документов-изображений во время завершения осмотра."""
+    doc = message.document
+    if not doc or not (doc.mime_type or "").startswith("image/"):
+        return
+
+    data = await state.get_data()
+    request_id = data.get("request_id")
+    
+    if not request_id:
+        await message.answer("Ошибка. Начните процесс заново.")
+        await state.clear()
+        return
+    
+    # Получаем документ как фото
+    caption = (message.caption or "").strip() or None
+    
+    # Добавляем фото в список
+    photos = data.get("photos", [])
+    photos.append({
+        "file_id": doc.file_id,
+        "caption": caption,
+    })
+    
+    await state.update_data(photos=photos)
+    
+    photo_count = len(photos)
+    await message.answer(
+        f"✅ Фото {photo_count} получено (документ).\n"
+        f"Отправлено фото: {photo_count}\n\n"
+        "Отправьте ещё фото или нажмите «✅ Подтвердить фото».",
+        reply_markup=_waiting_photos_keyboard(request_id),
+    )
+
+
 # --- служебные функции ---
+
+
+def _waiting_photos_keyboard(request_id: int):
+    """Клавиатура во время ожидания фото."""
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="✅ Подтвердить фото",
+        callback_data=f"eng:inspection:confirm_photos:{request_id}",
+    )
+    builder.button(
+        text="🔄 Отправить заново",
+        callback_data=f"eng:inspection:restart_photos:{request_id}",
+    )
+    builder.button(
+        text="❌ Отмена",
+        callback_data="eng:inspection:cancel",
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+@router.callback_query(
+    StateFilter(EngineerStates.inspection_waiting_photos),
+    F.data.startswith("eng:inspection:restart_photos:")
+)
+async def engineer_inspection_restart_photos(callback: CallbackQuery, state: FSMContext):
+    """Начать загрузку фото заново."""
+    request_id = int(callback.data.split(":")[3])
+    
+    data = await state.get_data()
+    if data.get("request_id") != request_id:
+        await callback.answer("Ошибка. Начните заново.", show_alert=True)
+        await state.clear()
+        return
+    
+    await state.update_data(photos=[], photo_file_ids=[])
+    await callback.message.edit_text(
+        "📷 Жду ваши фотографии.\n"
+        "Отправьте все необходимые фото дефектов. После отправки всех фото нажмите «✅ Подтвердить фото».",
+        reply_markup=_waiting_photos_keyboard(request_id),
+    )
+    await callback.answer("Начните отправку фото заново.")
+
+
 
 
 async def _get_engineer(session, telegram_id: int) -> User | None:
     return await session.scalar(
         select(User).where(User.telegram_id == telegram_id, User.role == UserRole.ENGINEER)
     )
+
+
 
 
 async def _load_engineer_requests(session, engineer_id: int) -> list[Request]:
@@ -631,6 +1167,12 @@ def _format_request_detail(request: Request) -> str:
             if item.notes:
                 lines.append(f"  → {item.notes}")
 
+    if request.acts:
+        letter_count = sum(1 for act in request.acts if act.type == ActType.LETTER)
+        if letter_count:
+            lines.append("")
+            lines.append("✉️ Письмо специалиста: приложено")
+
     return "\n".join(lines)
 
 
@@ -698,3 +1240,29 @@ def _build_engineer_analytics(requests: Sequence[Request]) -> str:
             lines.append(f"• {req.number} — до {req.due_at.strftime('%d.%m.%Y %H:%M')}")
 
     return "\n".join(lines)
+
+
+# --- служебные функции для каталога ---
+
+
+async def _update_catalog_message(message: Message, text: str, markup) -> None:
+    try:
+        await message.edit_text(text, reply_markup=markup)
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc).lower():
+            await message.edit_reply_markup(reply_markup=markup)
+        else:
+            await message.answer(text, reply_markup=markup)
+
+
+async def _get_work_item(session, request_id: int, name: str) -> WorkItem | None:
+    return await session.scalar(
+        select(WorkItem).where(
+            WorkItem.request_id == request_id,
+            func.lower(WorkItem.name) == name.lower(),
+        )
+    )
+
+
+def _catalog_header(request: Request) -> str:
+    return f"Заявка {request.number} · {request.title}"

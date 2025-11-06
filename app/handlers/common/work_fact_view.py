@@ -1,0 +1,160 @@
+from __future__ import annotations
+
+from typing import Iterable
+
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import InlineKeyboardMarkup
+
+from app.services.work_catalog import WorkCatalog, WorkCatalogCategory, WorkCatalogItem
+
+QUANTITY_SCALE = 100  # две цифры после запятой
+
+
+def encode_quantity(value: float) -> str:
+    return str(int(round(value * QUANTITY_SCALE)))
+
+
+def decode_quantity(value: str) -> float:
+    return int(value) / QUANTITY_SCALE
+
+
+def format_category_message(category: WorkCatalogCategory | None) -> str:
+    if not category:
+        return (
+            "📦 <b>Каталог работ</b>\n"
+            "Выберите раздел, затем конкретную работу.\n"
+            "После выбора объём будет пересчитан автоматически."
+        )
+
+    breadcrumb = " / ".join(category.path)
+    return (
+        f"📂 <b>{breadcrumb}</b>\n"
+        "Выберите работу или откройте вложенный раздел."
+    )
+
+
+def build_category_keyboard(
+    *,
+    catalog: WorkCatalog,
+    category: WorkCatalogCategory | None,
+    role_key: str,
+    request_id: int,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    category_id = category.id if category else None
+    subcategories: Iterable[WorkCatalogCategory] = (
+        catalog.get_root_categories() if category is None else catalog.iter_child_categories(category_id)
+    )
+    for sub in subcategories:
+        builder.button(
+            text=f"📂 {sub.name}",
+            callback_data=f"work:{role_key}:{request_id}:browse:{sub.id}",
+        )
+
+    if category is not None:
+        for item in catalog.iter_items(category.id):
+            builder.button(
+                text=f"🛠 {item.name}",
+                callback_data=f"work:{role_key}:{request_id}:item:{item.id}",
+            )
+    else:
+        # на корне показываем работы верхнего уровня
+        for root in catalog.get_root_categories():
+            for item in catalog.iter_items(root.id):
+                builder.button(
+                    text=f"🛠 {item.name}",
+                    callback_data=f"work:{role_key}:{request_id}:item:{item.id}",
+                )
+
+    if category is None:
+        builder.button(
+            text="✖️ Закрыть",
+            callback_data=f"work:{role_key}:{request_id}:close:root",
+        )
+    else:
+        parent_id = category.parent_id or "root"
+        builder.button(
+            text="⬅️ Назад",
+            callback_data=f"work:{role_key}:{request_id}:back:{parent_id}",
+        )
+        builder.button(
+            text="✖️ Закрыть",
+            callback_data=f"work:{role_key}:{request_id}:close:{category.id}",
+        )
+
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def format_quantity_message(
+    *,
+    catalog_item: WorkCatalogItem,
+    new_quantity: float,
+    current_quantity: float | None,
+) -> str:
+    price = catalog_item.price
+    new_cost = price * new_quantity
+    unit = catalog_item.unit or ""
+    unit_suffix = f" {unit}".rstrip()
+    if current_quantity is not None:
+        current_display = f"{current_quantity:.2f}{unit_suffix}"
+    else:
+        current_display = "—"
+    new_display = f"{new_quantity:.2f}{unit_suffix}"
+    return (
+        f"🛠 <b>{catalog_item.name}</b>\n"
+        f"Ед. измерения: {unit or '—'}\n"
+        f"Цена за единицу: {price:,.2f} ₽\n"
+        f"Текущий факт: {current_display}\n"
+        f"Новый факт: {new_display}\n"
+        f"Расчётная стоимость: {new_cost:,.2f} ₽\n\n"
+        "Используйте кнопки, чтобы скорректировать объём. «Сохранить» перезапишет факт."
+    ).replace(",", " ")
+
+
+def build_quantity_keyboard(
+    *,
+    catalog_item: WorkCatalogItem,
+    role_key: str,
+    request_id: int,
+    new_quantity: float,
+) -> InlineKeyboardMarkup:
+    deltas = [-5.0, -1.0, -0.5, -0.1, 0.1, 0.5, 1.0, 5.0]
+
+    def apply_delta(delta: float) -> float:
+        value = new_quantity + delta
+        return round(max(0.0, value), 2)
+
+    builder = InlineKeyboardBuilder()
+    for delta in deltas[:4]:
+        builder.button(
+            text=f"{delta:+}",
+            callback_data=_quantity_callback(role_key, request_id, catalog_item.id, apply_delta(delta)),
+        )
+    for delta in deltas[4:]:
+        builder.button(
+            text=f"{delta:+}",
+            callback_data=_quantity_callback(role_key, request_id, catalog_item.id, apply_delta(delta)),
+        )
+    builder.button(
+        text="0",
+        callback_data=_quantity_callback(role_key, request_id, catalog_item.id, 0.0),
+    )
+    builder.button(
+        text="✅ Сохранить",
+        callback_data=f"work:{role_key}:{request_id}:save:{catalog_item.id}:{encode_quantity(new_quantity)}",
+    )
+    builder.button(
+        text="⬅️ Назад",
+        callback_data=f"work:{role_key}:{request_id}:back:{catalog_item.category_id}",
+    )
+    builder.button(
+        text="✖️ Закрыть",
+        callback_data=f"work:{role_key}:{request_id}:close:{catalog_item.category_id}",
+    )
+    builder.adjust(4, 4, 2, 2)
+    return builder.as_markup()
+
+
+def _quantity_callback(role_key: str, request_id: int, item_id: str, quantity: float) -> str:
+    return f"work:{role_key}:{request_id}:qty:{item_id}:{encode_quantity(quantity)}"

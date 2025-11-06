@@ -5,7 +5,7 @@ class Base(DeclarativeBase):
     """Базовый класс для всех ORM-моделей."""
 
 
-from .act import Act
+from .act import Act, ActType
 from .dictionaries import Contract, DefectType, Object
 from .feedback import Feedback
 from .photo import Photo, PhotoType
@@ -34,6 +34,7 @@ __all__ = [
     "Photo",
     "PhotoType",
     "Act",
+    "ActType",
     "Feedback",
     "DefectType",
     "Object",

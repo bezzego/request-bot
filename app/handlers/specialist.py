@@ -12,7 +12,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.infrastructure.db.models import DefectType, Request, RequestStatus, User, UserRole
+from app.infrastructure.db.models import Act, ActType, DefectType, Request, RequestStatus, User, UserRole
 from app.infrastructure.db.session import async_session
 from app.services.request_service import RequestCreateData, RequestService
 
@@ -66,6 +66,7 @@ class NewRequestStates(StatesGroup):
     inspection_location = State()
     engineer = State()
     remedy_term = State()
+    letter = State()
     confirmation = State()
 
 
@@ -366,23 +367,36 @@ async def handle_remedy_term(message: Message, state: FSMContext):
         return
     await state.update_data(remedy_term_days=int(text))
 
-    data = await state.get_data()
-    summary = (
-        f"Проверьте данные:\n"
-        f"🔹 Заголовок: {data['title']}\n"
-        f"🔹 Объект: {data['object_name']}\n"
-        f"🔹 Адрес: {data['address']}\n"
-        f"🔹 Контакт: {data['contact_person']} / {data['contact_phone']}\n"
-        f"🔹 Договор: {data.get('contract_number') or '—'}\n"
-        f"🔹 Тип дефекта: {data.get('defect_type') or '—'}\n"
-        f"🔹 Осмотр: "
-        f"{data.get('inspection_datetime').strftime('%d.%m.%Y %H:%M') if data.get('inspection_datetime') else 'не указан'}\n"
-        f"🔹 Место осмотра: {data.get('inspection_location') or 'адрес объекта'}\n"
-        f"🔹 Срок устранения: {data['remedy_term_days']} дней\n\n"
-        "Отправьте «Подтвердить» для создания заявки или «Отмена» для отмены."
+    await state.set_state(NewRequestStates.letter)
+    await message.answer(
+        "Прикрепите файл обращения (письмо) в формате PDF/документа или отправьте «-», если письма нет.\n"
+        "Для отмены напишите «Отмена»."
     )
-    await state.set_state(NewRequestStates.confirmation)
-    await message.answer(summary)
+
+
+@router.message(StateFilter(NewRequestStates.letter), F.document)
+async def handle_letter_document(message: Message, state: FSMContext):
+    document = message.document
+    await state.update_data(
+        letter_file_id=document.file_id,
+        letter_file_name=document.file_name,
+    )
+    await _send_summary(message, state)
+
+
+@router.message(StateFilter(NewRequestStates.letter))
+async def handle_letter_choice(message: Message, state: FSMContext):
+    text = (message.text or "").strip().lower()
+    if text == "отмена":
+        await state.clear()
+        await message.answer("Создание заявки отменено.")
+        return
+    if text in {"-", "нет", "без письма"}:
+        await state.update_data(letter_file_id=None, letter_file_name=None)
+        await _send_summary(message, state)
+        return
+
+    await message.answer("Прикрепите файл обращения (например, PDF) или отправьте «-», если письма нет.")
 
 
 @router.message(StateFilter(NewRequestStates.confirmation), F.text.lower() == "подтвердить")
@@ -394,6 +408,8 @@ async def confirm_request(message: Message, state: FSMContext):
             await message.answer("Не удалось идентифицировать специалиста. Попробуйте снова.")
             await state.clear()
             return
+
+        engineer_user = await session.scalar(select(User).where(User.id == data["engineer_id"]))
 
         create_data = RequestCreateData(
             title=data["title"],
@@ -411,13 +427,47 @@ async def confirm_request(message: Message, state: FSMContext):
             remedy_term_days=data.get("remedy_term_days", 14),
         )
         request = await RequestService.create_request(session, create_data)
+
+        letter_file_id = data.get("letter_file_id")
+        if letter_file_id:
+            session.add(
+                Act(
+                    request_id=request.id,
+                    type=ActType.LETTER,
+                    file_id=letter_file_id,
+                    file_name=data.get("letter_file_name"),
+                    uploaded_by_id=data["specialist_id"],
+                )
+            )
+
         await session.commit()
 
+        request_number = request.number
+        request_title = request.title
+        due_at = request.due_at
+
     await message.answer(
-        f"✅ Заявка {request.number} создана и назначена инженеру.\n"
+        f"✅ Заявка {request_number} создана и назначена инженеру.\n"
         "Следите за статусом в разделе «📄 Мои заявки»."
     )
     await state.clear()
+
+    engineer_telegram = getattr(engineer_user, "telegram_id", None) if engineer_user else None
+    if engineer_telegram:
+        due_text = due_at.strftime("%d.%m.%Y %H:%M") if due_at else "не задан"
+        notification = (
+            f"Новая заявка {request_number}.\n"
+            f"Название: {request_title}\n"
+            f"Объект: {data['object_name']}\n"
+            f"Адрес: {data['address']}\n"
+            f"Срок устранения: {due_text}"
+        )
+        if data.get("letter_file_id"):
+            notification += "\nПисьмо: приложено."
+        try:
+            await message.bot.send_message(chat_id=int(engineer_telegram), text=notification)
+        except Exception:
+            pass
 
 
 @router.message(StateFilter(NewRequestStates.confirmation), F.text.lower() == "отмена")
@@ -432,6 +482,38 @@ async def confirmation_help(message: Message):
 
 
 # --- вспомогательные функции ---
+
+
+async def _send_summary(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    summary = _build_request_summary(data)
+    await state.set_state(NewRequestStates.confirmation)
+    await message.answer(summary)
+
+
+def _build_request_summary(data: dict) -> str:
+    inspection_dt = data.get("inspection_datetime")
+    if inspection_dt:
+        inspection_text = inspection_dt.strftime("%d.%m.%Y %H:%M")
+    else:
+        inspection_text = "не указан"
+
+    letter_text = "приложено" if data.get("letter_file_id") else "нет"
+
+    return (
+        "Проверьте данные:\n"
+        f"🔹 Заголовок: {data['title']}\n"
+        f"🔹 Объект: {data['object_name']}\n"
+        f"🔹 Адрес: {data['address']}\n"
+        f"🔹 Контакт: {data['contact_person']} / {data['contact_phone']}\n"
+        f"🔹 Договор: {data.get('contract_number') or '—'}\n"
+        f"🔹 Тип дефекта: {data.get('defect_type') or '—'}\n"
+        f"🔹 Осмотр: {inspection_text}\n"
+        f"🔹 Место осмотра: {data.get('inspection_location') or 'адрес объекта'}\n"
+        f"🔹 Срок устранения: {data.get('remedy_term_days', 14)} дней\n"
+        f"🔹 Письмо: {letter_text}\n\n"
+        "Отправьте «Подтвердить» для создания заявки или «Отмена» для отмены."
+    )
 
 STATUS_TITLES = {
     RequestStatus.NEW: "Новая",
@@ -530,7 +612,13 @@ def _format_specialist_request_detail(request: Request) -> str:
 
     if request.acts:
         lines.append("")
-        lines.append(f"📝 Загружено актов: {len(request.acts)}")
+        letter_count = sum(1 for act in request.acts if act.type == ActType.LETTER)
+        act_count = len(request.acts) - letter_count
+        if act_count:
+            lines.append(f"📝 Акты: {act_count}")
+        if letter_count:
+            letter_text = "приложено" if letter_count == 1 else f"приложено ({letter_count})"
+            lines.append(f"✉️ Письмо: {letter_text}")
     if request.photos:
         lines.append(f"📷 Фотоотчётов: {len(request.photos)}")
     if request.feedback:

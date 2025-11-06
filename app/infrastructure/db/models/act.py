@@ -13,6 +13,7 @@ class ActType(enum.StrEnum):
 
     INSPECTION = "inspection"  # акт осмотра
     COMPLETION = "completion"  # акт выполненных работ
+    LETTER = "letter"  # сопроводительное письмо от специалиста
 
 
 class Act(Base):
