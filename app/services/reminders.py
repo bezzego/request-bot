@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import datetime, timezone
+from datetime import datetime
 
 from aiogram import Bot
 from sqlalchemy import select, update
@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.infrastructure.db.models import Request, RequestReminder, RequestStatus
 from app.infrastructure.db.session import async_session
+from app.utils.timezone import format_moscow, now_moscow
 
 
 class ReminderService:
@@ -44,10 +45,11 @@ class ReminderService:
         request = reminder.request
         status_title = STATUS_TITLES.get(request.status, request.status.value)
         if reminder.reminder_type.name == "INSPECTION":
+            inspection_time = format_moscow(reminder.scheduled_at) or "не задано"
             return (
                 f"🔔 Напоминание об осмотре по заявке {request.number}\n"
                 f"Объект: {request.object.name if request.object else request.title}\n"
-                f"Время: {reminder.scheduled_at:%d.%m.%Y %H:%M}\n"
+                f"Время: {inspection_time}\n"
                 f"Адрес: {request.address}"
             )
         if reminder.reminder_type.name == "DOCUMENT_SIGN":
@@ -56,9 +58,10 @@ class ReminderService:
                 f"Текущий статус: {status_title}. Подтвердите документы и уведомите заказчика."
             )
         if reminder.reminder_type.name == "DEADLINE":
+            deadline_time = format_moscow(reminder.scheduled_at) or "не указано"
             return (
                 f"⏰ Срок выполнения по заявке {request.number} истекает "
-                f"{reminder.scheduled_at:%d.%m.%Y %H:%M}. Проверьте готовность и обновите отчёт."
+                f"{deadline_time}. Проверьте готовность и обновите отчёт."
             )
         if reminder.reminder_type.name == "OVERDUE":
             return (
@@ -79,7 +82,7 @@ class ReminderService:
             .where(RequestReminder.id == reminder_id)
             .values(
                 is_sent=True,
-                sent_at=datetime.now(timezone.utc),
+                sent_at=now_moscow(),
                 payload=payload,
             )
         )
@@ -111,7 +114,7 @@ class ReminderScheduler:
         while self._running:
             try:
                 async with async_session() as session:
-                    now = datetime.now(timezone.utc)
+                    now = now_moscow()
                     reminders = await ReminderService.get_due_reminders(session, now)
                     for reminder in reminders:
                         message = ReminderService.build_message(reminder)

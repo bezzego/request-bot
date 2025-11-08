@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.db.models import Request
+from app.utils.timezone import now_moscow
 
 
 async def generate_request_number(session: AsyncSession) -> str:
     """Генерирует уникальный номер заявки формата RQ-YYYYMMDD-XXXX."""
-    today = datetime.now().strftime("%Y%m%d")
+    today = now_moscow().strftime("%Y%m%d")
     stmt = (
         select(func.count(Request.id))
         .where(Request.number.like(f"RQ-{today}-%"))

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.infrastructure.db.models import Request
+from app.utils.timezone import format_moscow
 
 
 class ExportService:
@@ -78,8 +79,8 @@ class ExportService:
                         req.specialist.full_name if req.specialist else "",
                         req.engineer.full_name if req.engineer else "",
                         req.master.full_name if req.master else "",
-                        req.due_at.strftime("%d.%m.%Y") if req.due_at else "",
-                        req.work_completed_at.strftime("%d.%m.%Y %H:%M") if req.work_completed_at else "",
+                        format_moscow(req.due_at, "%d.%m.%Y") or "",
+                        format_moscow(req.work_completed_at) or "",
                         req.planned_budget or 0,
                         req.actual_budget or 0,
                         req.planned_hours or 0,

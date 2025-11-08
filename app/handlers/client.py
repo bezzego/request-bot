@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
@@ -13,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.infrastructure.db.models import Feedback, Request, RequestStatus, User, UserRole
 from app.infrastructure.db.session import async_session
+from app.utils.timezone import format_moscow
 
 router = Router()
 
@@ -299,7 +298,7 @@ async def _load_request(session, client_id: int, request_id: int) -> Request | N
 
 def _format_request_detail(request: Request) -> str:
     status = STATUS_TITLES.get(request.status, request.status.value)
-    due = request.due_at.strftime("%d.%m.%Y %H:%M") if request.due_at else "не задан"
+    due = format_moscow(request.due_at) or "не задан"
     engineer = request.engineer.full_name if request.engineer else "—"
     master = request.master.full_name if request.master else "—"
 

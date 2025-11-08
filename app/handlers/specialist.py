@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
@@ -8,16 +8,26 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.infrastructure.db.models import Act, ActType, DefectType, Request, RequestStatus, User, UserRole
+from app.infrastructure.db.models import (
+    Act,
+    ActType,
+    DefectType,
+    Request,
+    RequestStatus,
+    User,
+    UserRole,
+)
 from app.infrastructure.db.session import async_session
+from app.keyboards.calendar import build_calendar, parse_calendar_callback, shift_month
 from app.services.request_service import RequestCreateData, RequestService
-
+from app.utils.timezone import combine_moscow, format_moscow, now_moscow
 
 router = Router()
+
+SPEC_CALENDAR_PREFIX = "spec_inspection"
 
 
 async def _get_specialist(session, telegram_id: int) -> User | None:
@@ -53,6 +63,18 @@ def _defect_type_keyboard(defect_types: list[DefectType]):
     return builder.as_markup()
 
 
+async def _prompt_inspection_calendar(message: Message):
+    await message.answer(
+        "Когда планируется комиссионный осмотр?\n"
+        "Выберите дату через календарь или отправьте «-», если дата пока не определена.",
+        reply_markup=build_calendar(SPEC_CALENDAR_PREFIX),
+    )
+
+
+async def _prompt_inspection_location(message: Message):
+    await message.answer("Место осмотра (если отличается от адреса). Если совпадает — отправьте «-».")
+
+
 class NewRequestStates(StatesGroup):
     title = State()
     description = State()
@@ -63,6 +85,7 @@ class NewRequestStates(StatesGroup):
     contract_number = State()
     defect_type = State()
     inspection_datetime = State()
+    inspection_time = State()
     inspection_location = State()
     engineer = State()
     remedy_term = State()
@@ -280,11 +303,7 @@ async def handle_defect_type_choice(callback: CallbackQuery, state: FSMContext):
     await state.update_data(defect_type=defect.name)
     await state.set_state(NewRequestStates.inspection_datetime)
     await callback.message.edit_text(f"Тип дефекта: {defect.name}")
-    await callback.message.answer(
-        "Когда планируется комиссионный осмотр?\n"
-        "Формат: <code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n"
-        "Если время ещё не известно — отправьте «-»."
-    )
+    await _prompt_inspection_calendar(callback.message)
     await callback.answer()
 
 
@@ -293,28 +312,60 @@ async def handle_defect_type(message: Message, state: FSMContext):
     defect = message.text.strip()
     await state.update_data(defect_type=None if defect == "-" else defect)
     await state.set_state(NewRequestStates.inspection_datetime)
-    await message.answer(
-        "Когда планируется комиссионный осмотр?\n"
-        "Формат: <code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n"
-        "Если время ещё не известно — отправьте «-»."
-    )
+    await _prompt_inspection_calendar(message)
 
 
 @router.message(StateFilter(NewRequestStates.inspection_datetime))
 async def handle_inspection_datetime(message: Message, state: FSMContext):
     text = message.text.strip()
     if text == "-":
-        await state.update_data(inspection_datetime=None)
-    else:
-        try:
-            inspection_dt = datetime.strptime(text, "%d.%m.%Y %H:%M")
-            await state.update_data(inspection_datetime=inspection_dt)
-        except ValueError:
-            await message.answer("Не удалось распознать дату. Используйте формат ДД.ММ.ГГГГ ЧЧ:ММ.")
-            return
+        await state.update_data(inspection_datetime=None, inspection_date=None)
+        await state.set_state(NewRequestStates.inspection_location)
+        await _prompt_inspection_location(message)
+        return
 
-    await state.set_state(NewRequestStates.inspection_location)
-    await message.answer("Место осмотра (если отличается от адреса). Если совпадает — отправьте «-».")
+    await message.answer(
+        "Дата выбирается через календарь. Нажмите на нужный день или отправьте «-», если дата неизвестна."
+    )
+
+
+@router.callback_query(
+    StateFilter(NewRequestStates.inspection_datetime),
+    F.data.startswith(f"cal:{SPEC_CALENDAR_PREFIX}:"),
+)
+async def specialist_calendar_callback(callback: CallbackQuery, state: FSMContext):
+    payload = parse_calendar_callback(callback.data)
+    if not payload:
+        await callback.answer()
+        return
+
+    if payload.action in {"prev", "next"}:
+        new_year, new_month = shift_month(payload.year, payload.month, payload.action)
+        await callback.message.edit_reply_markup(
+            reply_markup=build_calendar(SPEC_CALENDAR_PREFIX, year=new_year, month=new_month)
+        )
+        await callback.answer()
+        return
+
+    if payload.action == "day" and payload.day:
+        selected = date(payload.year, payload.month, payload.day)
+        await state.update_data(
+            inspection_date=selected.isoformat(),
+            inspection_datetime=None,
+        )
+        await state.set_state(NewRequestStates.inspection_time)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await callback.message.answer(
+            f"Дата осмотра: {selected.strftime('%d.%m.%Y')}.\n"
+            "Введите время в формате ЧЧ:ММ или отправьте «-», если время пока неизвестно."
+        )
+        await callback.answer(f"Выбрано {selected.strftime('%d.%m.%Y')}")
+        return
+
+    await callback.answer()
 
 
 @router.message(StateFilter(NewRequestStates.inspection_location))
@@ -454,7 +505,7 @@ async def confirm_request(message: Message, state: FSMContext):
 
     engineer_telegram = getattr(engineer_user, "telegram_id", None) if engineer_user else None
     if engineer_telegram:
-        due_text = due_at.strftime("%d.%m.%Y %H:%M") if due_at else "не задан"
+        due_text = format_moscow(due_at) or "не задан"
         notification = (
             f"Новая заявка {request_number}.\n"
             f"Название: {request_title}\n"
@@ -493,10 +544,7 @@ async def _send_summary(message: Message, state: FSMContext) -> None:
 
 def _build_request_summary(data: dict) -> str:
     inspection_dt = data.get("inspection_datetime")
-    if inspection_dt:
-        inspection_text = inspection_dt.strftime("%d.%m.%Y %H:%M")
-    else:
-        inspection_text = "не указан"
+    inspection_text = format_moscow(inspection_dt) or "не указан"
 
     letter_text = "приложено" if data.get("letter_file_id") else "нет"
 
@@ -552,17 +600,9 @@ def _format_specialist_request_detail(request: Request) -> str:
     status_title = STATUS_TITLES.get(request.status, request.status.value)
     engineer = request.engineer.full_name if request.engineer else "—"
     master = request.master.full_name if request.master else "—"
-    due_text = request.due_at.strftime("%d.%m.%Y %H:%M") if request.due_at else "не задан"
-    inspection_text = (
-        request.inspection_scheduled_at.strftime("%d.%m.%Y %H:%M")
-        if request.inspection_scheduled_at
-        else "не назначен"
-    )
-    inspection_done = (
-        request.inspection_completed_at.strftime("%d.%m.%Y %H:%M")
-        if request.inspection_completed_at
-        else "нет"
-    )
+    due_text = format_moscow(request.due_at) or "не задан"
+    inspection_text = format_moscow(request.inspection_scheduled_at) or "не назначен"
+    inspection_done = format_moscow(request.inspection_completed_at) or "нет"
 
     planned_budget = float(request.planned_budget or 0)
     actual_budget = float(request.actual_budget or 0)
@@ -649,7 +689,7 @@ def _format_hours(value: float | None) -> str:
 def _build_specialist_analytics(requests: list[Request]) -> str:
     from collections import Counter
 
-    now = datetime.now(timezone.utc)
+    now = now_moscow()
     status_counter = Counter(req.status for req in requests)
     total = len(requests)
     active = sum(1 for req in requests if req.status not in {RequestStatus.CLOSED, RequestStatus.CANCELLED})
@@ -701,6 +741,35 @@ def _build_specialist_analytics(requests: list[Request]) -> str:
         lines.append("")
         lines.append("⚠️ Срок закрытия в ближайшие 72 часа:")
         for req in upcoming:
-            lines.append(f"• {req.number} — до {req.due_at.strftime('%d.%m.%Y %H:%M')}")
+            due_text = format_moscow(req.due_at) or "не задан"
+            lines.append(f"• {req.number} — до {due_text}")
 
     return "\n".join(lines)
+@router.message(StateFilter(NewRequestStates.inspection_time))
+async def handle_inspection_time(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+    if text == "-":
+        await state.update_data(inspection_datetime=None, inspection_date=None)
+        await state.set_state(NewRequestStates.inspection_location)
+        await _prompt_inspection_location(message)
+        return
+
+    try:
+        time_value = datetime.strptime(text, "%H:%M").time()
+    except ValueError:
+        await message.answer("Не удалось распознать время. Используйте формат ЧЧ:ММ.")
+        return
+
+    data = await state.get_data()
+    date_text = data.get("inspection_date")
+    if not date_text:
+        await message.answer("Сначала выберите дату через календарь.")
+        await state.set_state(NewRequestStates.inspection_datetime)
+        await _prompt_inspection_calendar(message)
+        return
+
+    selected_date = date.fromisoformat(date_text)
+    inspection_dt = combine_moscow(selected_date, time_value)
+    await state.update_data(inspection_datetime=inspection_dt, inspection_date=None)
+    await state.set_state(NewRequestStates.inspection_location)
+    await _prompt_inspection_location(message)

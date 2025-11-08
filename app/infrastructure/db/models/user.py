@@ -1,11 +1,19 @@
+from __future__ import annotations
+
 import enum
 from datetime import datetime
-from zoneinfo import ZoneInfo
+from typing import TYPE_CHECKING
 
 from sqlalchemy import BigInteger, DateTime, Enum, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.db.models import Base
+from app.utils.timezone import now_moscow
+
+if TYPE_CHECKING:
+    from app.infrastructure.db.models.request import Request
+    from app.infrastructure.db.models.stage_history import RequestStageHistory
+    from app.infrastructure.db.models.work_session import WorkSession
 
 
 class UserRole(enum.StrEnum):
@@ -29,29 +37,27 @@ class User(Base):
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(ZoneInfo("Europe/Moscow"))
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_moscow)
 
     # ––– связи –––
-    created_request: Mapped[list["Request"]] = relationship(
+    created_request: Mapped[list[Request]] = relationship(
         back_populates="specialist",
         foreign_keys="Request.specialist_id",
     )
-    engineer_request: Mapped[list["Request"]] = relationship(
+    engineer_request: Mapped[list[Request]] = relationship(
         back_populates="engineer",
         foreign_keys="Request.engineer_id",
     )
-    master_request: Mapped[list["Request"]] = relationship(
+    master_request: Mapped[list[Request]] = relationship(
         back_populates="master",
         foreign_keys="Request.master_id",
     )
-    work_sessions: Mapped[list["WorkSession"]] = relationship(
+    work_sessions: Mapped[list[WorkSession]] = relationship(
         "WorkSession",
         back_populates="master",
         foreign_keys="WorkSession.master_id",
     )
-    stage_changes: Mapped[list["RequestStageHistory"]] = relationship(
+    stage_changes: Mapped[list[RequestStageHistory]] = relationship(
         "RequestStageHistory",
         back_populates="changed_by",
         foreign_keys="RequestStageHistory.changed_by_id",

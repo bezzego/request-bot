@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Iterable
+from datetime import datetime, timedelta
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
@@ -23,8 +23,9 @@ from app.infrastructure.db.models import (
     WorkItem,
     WorkSession,
 )
-from app.utils.identifiers import generate_request_number
 from app.services.work_catalog import WorkCatalogItem
+from app.utils.identifiers import generate_request_number
+from app.utils.timezone import now_moscow, to_moscow
 
 
 @dataclass(slots=True)
@@ -85,7 +86,8 @@ class RequestService:
         if data.defect_type_name:
             defect_ref = await RequestService._get_or_create_defect_type(session, data.defect_type_name)
 
-        due_at = RequestService._calculate_due_date(data.inspection_datetime, data.remedy_term_days)
+        inspection_dt = to_moscow(data.inspection_datetime)
+        due_at = RequestService._calculate_due_date(inspection_dt, data.remedy_term_days)
 
         request = Request(
             number=request_number,
@@ -97,16 +99,14 @@ class RequestService:
             address=data.address,
             contact_person=data.contact_person,
             contact_phone=data.contact_phone,
-            inspection_scheduled_at=data.inspection_datetime,
+            inspection_scheduled_at=inspection_dt,
             inspection_location=data.inspection_location,
             due_at=due_at,
             remedy_term_days=data.remedy_term_days,
             specialist_id=data.specialist_id,
             engineer_id=data.engineer_id,
             customer_id=data.customer_id,
-            status=RequestStatus.INSPECTION_SCHEDULED
-            if data.inspection_datetime
-            else RequestStatus.NEW,
+            status=RequestStatus.INSPECTION_SCHEDULED if inspection_dt else RequestStatus.NEW,
         )
 
         session.add(request)
@@ -120,16 +120,16 @@ class RequestService:
             comment="Заявка создана специалистом",
         )
 
-        if data.inspection_datetime:
+        if inspection_dt:
             await RequestService._schedule_reminder(
                 session=session,
                 request=request,
                 reminder_type=ReminderType.INSPECTION,
-                scheduled_at=data.inspection_datetime,
+                scheduled_at=inspection_dt,
                 recipients=[data.engineer_id, data.specialist_id],
             )
         else:
-            follow_up = datetime.now(timezone.utc) + timedelta(hours=4)
+            follow_up = now_moscow() + timedelta(hours=4)
             await RequestService._schedule_reminder(
                 session=session,
                 request=request,
@@ -167,6 +167,7 @@ class RequestService:
         inspection_location: str | None = None,
     ) -> Request:
         """Назначает инженера на заявку или обновляет план осмотра."""
+        inspection_datetime = to_moscow(inspection_datetime)
         previous_status = request.status
         request.engineer_id = engineer_id
         if inspection_datetime:
@@ -216,7 +217,8 @@ class RequestService:
     ) -> Request:
         """Фиксирует факт прохождения осмотра инженером."""
         previous_status = request.status
-        request.inspection_completed_at = completed_at or datetime.now(timezone.utc)
+        completed_dt = to_moscow(completed_at) or now_moscow()
+        request.inspection_completed_at = completed_dt
         request.inspection_notes = notes
         request.status = RequestStatus.INSPECTED
         await session.flush()
@@ -229,7 +231,7 @@ class RequestService:
             changed_by_id=engineer_id,
             comment="Инженер завершил осмотр",
         )
-        follow_up = datetime.now(timezone.utc) + timedelta(hours=4)
+        follow_up = now_moscow() + timedelta(hours=4)
         await RequestService._schedule_reminder(
             session=session,
             request=request,
@@ -249,9 +251,9 @@ class RequestService:
         """Назначает мастера и переводит заявку в статус ASSIGNED."""
         previous_status = request.status
         request.master_id = master_id
-        request.master_assigned_at = datetime.now(timezone.utc)
+        request.master_assigned_at = now_moscow()
         if not request.due_at:
-            request.due_at = datetime.now(timezone.utc) + timedelta(days=request.remedy_term_days)
+            request.due_at = now_moscow() + timedelta(days=request.remedy_term_days)
         request.status = RequestStatus.ASSIGNED
         await session.flush()
 
@@ -283,7 +285,7 @@ class RequestService:
                 recipients=recipients,
                 replace_existing=True,
             )
-        follow_up = datetime.now(timezone.utc) + timedelta(hours=12)
+        follow_up = now_moscow() + timedelta(hours=12)
         await RequestService._schedule_reminder(
             session=session,
             request=request,
@@ -305,7 +307,7 @@ class RequestService:
         started_at: datetime | None = None,
     ) -> WorkSession:
         """Фиксирует начало работ мастером."""
-        started_at = started_at or datetime.now(timezone.utc)
+        started_at = to_moscow(started_at) or now_moscow()
         work_session = WorkSession(
             request_id=request.id,
             master_id=master_id,
@@ -353,9 +355,10 @@ class RequestService:
         finished_at: datetime | None = None,
         hours_reported: float | None = None,
         completion_notes: str | None = None,
+        finalize: bool = True,
     ) -> WorkSession:
-        """Закрывает сессию работ мастера и переводит заявку в статус COMPLETED."""
-        finished_at = finished_at or datetime.now(timezone.utc)
+        """Закрывает смену мастера. При finalize=True переводит заявку в COMPLETED."""
+        finished_at = to_moscow(finished_at) or now_moscow()
         filters = [
             WorkSession.master_id == master_id,
             WorkSession.finished_at.is_(None),
@@ -380,41 +383,52 @@ class RequestService:
             delta = finished_at - work_session.started_at
             work_session.hours_calculated = round(delta.total_seconds() / 3600, 2)
 
-        previous_status = request.status
-        request.work_completed_at = finished_at
-        request.completion_notes = completion_notes
-        request.status = RequestStatus.COMPLETED
-        await session.flush()
-
-        await RequestService._register_stage(
-            session=session,
-            request=request,
-            from_status=previous_status,
-            to_status=RequestStatus.COMPLETED,
-            changed_by_id=master_id,
-            comment="Мастер завершил работы и направил отчёт",
-        )
-
         await RequestService._recalculate_hours(session, request)
 
-        sign_at = finished_at + timedelta(hours=2)
-        manager_ids = await RequestService._get_manager_ids(session)
-        recipients = [request.engineer_id, request.specialist_id, *(manager_ids or [])]
-        await RequestService._schedule_reminder(
-            session=session,
-            request=request,
-            reminder_type=ReminderType.DOCUMENT_SIGN,
-            scheduled_at=sign_at,
-            recipients=recipients,
-            replace_existing=True,
-        )
-        await RequestService._schedule_reminder(
-            session=session,
-            request=request,
-            reminder_type=ReminderType.REPORT,
-            scheduled_at=finished_at + timedelta(hours=6),
-            recipients=recipients,
-        )
+        previous_status = request.status
+        if finalize:
+            request.work_completed_at = finished_at
+            request.completion_notes = completion_notes
+            request.status = RequestStatus.COMPLETED
+        await session.flush()
+
+        if finalize:
+            await RequestService._register_stage(
+                session=session,
+                request=request,
+                from_status=previous_status,
+                to_status=RequestStatus.COMPLETED,
+                changed_by_id=master_id,
+                comment="Мастер завершил работы и направил отчёт",
+            )
+
+            sign_at = finished_at + timedelta(hours=2)
+            manager_ids = await RequestService._get_manager_ids(session)
+            recipients = [request.engineer_id, request.specialist_id, *(manager_ids or [])]
+            await RequestService._schedule_reminder(
+                session=session,
+                request=request,
+                reminder_type=ReminderType.DOCUMENT_SIGN,
+                scheduled_at=sign_at,
+                recipients=recipients,
+                replace_existing=True,
+            )
+            await RequestService._schedule_reminder(
+                session=session,
+                request=request,
+                reminder_type=ReminderType.REPORT,
+                scheduled_at=finished_at + timedelta(hours=6),
+                recipients=recipients,
+            )
+        else:
+            await RequestService._register_stage(
+                session=session,
+                request=request,
+                from_status=previous_status,
+                to_status=request.status,
+                changed_by_id=master_id,
+                comment="Мастер завершил смену (работы продолжаются)",
+            )
         return work_session
 
     @staticmethod
@@ -437,7 +451,7 @@ class RequestService:
             comment="Заявка готова к подписанию актов",
         )
 
-        reminder_at = datetime.now(timezone.utc) + timedelta(hours=4)
+        reminder_at = now_moscow() + timedelta(hours=4)
         manager_ids = await RequestService._get_manager_ids(session)
         recipients = [request.engineer_id, request.specialist_id, *(manager_ids or [])]
         await RequestService._schedule_reminder(
@@ -586,12 +600,26 @@ class RequestService:
         actual_quantity: float,
         author_id: int,
     ) -> WorkItem:
-        stmt = select(WorkItem).where(
-            WorkItem.request_id == request.id,
-            func.lower(WorkItem.name) == catalog_item.name.lower(),
+        norm_target = _normalize_work_item_name(catalog_item.name)
+        stmt = (
+            select(WorkItem)
+            .where(WorkItem.request_id == request.id)
+            .order_by(WorkItem.id.asc())
         )
         result = await session.execute(stmt)
-        work_item = result.scalars().first()
+        candidates = [item for item in result.scalars().all() if _normalize_work_item_name(item.name) == norm_target]
+
+        work_item: WorkItem | None = None
+        duplicates: list[WorkItem] = []
+        for candidate in candidates:
+            if work_item is None:
+                work_item = candidate
+                continue
+            if _has_plan_data(candidate) and not _has_plan_data(work_item):
+                duplicates.append(work_item)
+                work_item = candidate
+            else:
+                duplicates.append(candidate)
 
         category_label = " / ".join(catalog_item.path[:-1]) or None
 
@@ -607,6 +635,11 @@ class RequestService:
                 planned_material_cost=None,
             )
             session.add(work_item)
+        else:
+            for duplicate in duplicates:
+                if not work_item.notes and duplicate.notes:
+                    work_item.notes = duplicate.notes
+                await session.delete(duplicate)
 
         work_item.category = work_item.category or category_label
         work_item.unit = catalog_item.unit or work_item.unit
@@ -831,7 +864,7 @@ class RequestService:
 
     @staticmethod
     def _calculate_due_date(start: datetime | None, remedy_term_days: int) -> datetime | None:
-        baseline = start or datetime.now(timezone.utc)
+        baseline = to_moscow(start) or now_moscow()
         return baseline + timedelta(days=remedy_term_days)
 
     @staticmethod
@@ -840,6 +873,22 @@ class RequestService:
             select(User.id).where(User.role == UserRole.MANAGER)
         )
         return list(rows.scalars().all())
+
+
+def _normalize_work_item_name(value: str) -> str:
+    return " ".join(value.strip().lower().split())
+
+
+def _has_plan_data(item: WorkItem) -> bool:
+    return any(
+        field not in (None, 0)
+        for field in (
+            item.planned_quantity,
+            item.planned_hours,
+            item.planned_cost,
+            item.planned_material_cost,
+        )
+    )
 
 
 async def load_request(session: AsyncSession, request_number: str) -> Request | None:

@@ -1,10 +1,16 @@
+from __future__ import annotations
+
 from datetime import datetime
-from zoneinfo import ZoneInfo
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, Float, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.db.models import Base
+from app.utils.timezone import now_moscow
+
+if TYPE_CHECKING:
+    from app.infrastructure.db.models.request import Request
 
 
 class WorkItem(Base):
@@ -38,17 +44,15 @@ class WorkItem(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # дата создания и обновления
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(ZoneInfo("Europe/Moscow"))
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_moscow)
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
-        onupdate=lambda: datetime.now(ZoneInfo("Europe/Moscow")),
+        onupdate=now_moscow,
     )
 
     # связь с заявкой
-    request: Mapped["Request"] = relationship(back_populates="work_items")
+    request: Mapped[Request] = relationship(back_populates="work_items")
 
     def __repr__(self) -> str:
         return (

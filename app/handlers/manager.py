@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, FSInputFile, Message
@@ -8,11 +8,12 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.infrastructure.db.models import Request, RequestStatus, User, UserRole
+from app.infrastructure.db.models import Request, User, UserRole
 from app.infrastructure.db.session import async_session
 from app.services.export import ExportService
 from app.services.reporting import ReportingService
 from app.services.user_service import UserRoleService
+from app.utils.timezone import now_moscow
 
 router = Router()
 
@@ -125,7 +126,7 @@ async def manager_set_role(callback: CallbackQuery):
 
 @router.message(F.text == "📊 Отчёты и статистика")
 async def manager_reports(message: Message):
-    now = datetime.now(timezone.utc)
+    now = now_moscow()
     start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
     async with async_session() as session:
@@ -232,7 +233,7 @@ async def manager_export_cancel(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("manager:export:"))
 async def manager_export(callback: CallbackQuery):
     period_days = int(callback.data.split(":")[2])
-    end = datetime.now(timezone.utc)
+    end = now_moscow()
     start = end - timedelta(days=period_days)
 
     async with async_session() as session:

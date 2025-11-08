@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Sequence
+import logging
+from collections.abc import Sequence
+from datetime import date, datetime
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -13,6 +14,13 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
+from app.handlers.common.work_fact_view import (
+    build_category_keyboard,
+    build_quantity_keyboard,
+    decode_quantity,
+    format_category_message,
+    format_quantity_message,
+)
 from app.infrastructure.db.models import (
     ActType,
     Photo,
@@ -24,24 +32,20 @@ from app.infrastructure.db.models import (
     WorkItem,
 )
 from app.infrastructure.db.session import async_session
+from app.keyboards.calendar import build_calendar, parse_calendar_callback, shift_month
 from app.services.request_service import RequestService
 from app.services.work_catalog import get_work_catalog
-from app.handlers.common.work_fact_view import (
-    build_category_keyboard,
-    build_quantity_keyboard,
-    decode_quantity,
-    format_category_message,
-    format_quantity_message,
-)
+from app.utils.timezone import combine_moscow, format_moscow, now_moscow
 
 router = Router()
-import logging
+ENGINEER_CALENDAR_PREFIX = "eng_schedule"
 
 logger = logging.getLogger(__name__)
 
 
 class EngineerStates(StatesGroup):
-    schedule_datetime = State()
+    schedule_date = State()
+    schedule_time = State()
     # Состояния для завершения осмотра
     inspection_waiting_photos = State()  # Ожидание отправки фото
     inspection_waiting_comment = State()  # Ожидание комментария
@@ -59,6 +63,15 @@ STATUS_TITLES = {
     RequestStatus.CLOSED: "Закрыта",
     RequestStatus.CANCELLED: "Отменена",
 }
+
+
+async def _prompt_schedule_calendar(message: Message):
+    await message.answer(
+        "Когда назначить комиссионный осмотр?\n"
+        "Выберите дату через календарь или отправьте «-» (или «-; новое место»), если дата пока не определена.\n"
+        "Для отмены напишите «Отмена».",
+        reply_markup=build_calendar(ENGINEER_CALENDAR_PREFIX),
+    )
 
 
 @router.message(F.text == "📋 Мои заявки")
@@ -145,35 +158,135 @@ async def engineer_back_to_list(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("eng:schedule:"))
 async def engineer_schedule(callback: CallbackQuery, state: FSMContext):
     request_id = int(callback.data.split(":")[2])
-    await state.set_state(EngineerStates.schedule_datetime)
+    await state.set_state(EngineerStates.schedule_date)
     await state.update_data(request_id=request_id)
-    await callback.message.answer(
-        "Введите дату и время осмотра в формате «ДД.ММ.ГГГГ ЧЧ:ММ».\n"
-        "Можно добавить место осмотра после точки с запятой: 25.10.2025 10:00; Склад №3."
-    )
+    await _prompt_schedule_calendar(callback.message)
     await callback.answer()
 
 
-@router.message(StateFilter(EngineerStates.schedule_datetime))
-async def engineer_schedule_datetime(message: Message, state: FSMContext):
-    if message.text.lower() == "отмена":
+@router.message(StateFilter(EngineerStates.schedule_date))
+async def engineer_schedule_date_text(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+    lowered = text.lower()
+    if lowered == "отмена":
         await state.clear()
         await message.answer("Действие отменено.")
         return
 
-    data = await state.get_data()
-    request_id = data.get("request_id")
-
-    parts = [part.strip() for part in message.text.split(";")]
-    datetime_part = parts[0]
-    location_part = parts[1] if len(parts) > 1 else None
-    try:
-        inspection_dt = datetime.strptime(datetime_part, "%d.%m.%Y %H:%M")
-    except ValueError:
-        await message.answer("Не удалось распознать дату. Используйте формат ДД.ММ.ГГГГ ЧЧ:ММ.")
+    if text.startswith("-"):
+        location = None
+        if ";" in text:
+            _, location_part = text.split(";", 1)
+            location = location_part.strip() or None
+        await _complete_engineer_schedule(
+            message,
+            state,
+            inspection_dt=None,
+            location=location,
+        )
         return
 
-    inspection_dt = inspection_dt.replace(tzinfo=timezone.utc)
+    await message.answer(
+        "Дата выбирается через календарь. Нажмите на нужный день или отправьте «-», если дата пока неизвестна."
+    )
+
+
+@router.callback_query(
+    StateFilter(EngineerStates.schedule_date),
+    F.data.startswith(f"cal:{ENGINEER_CALENDAR_PREFIX}:"),
+)
+async def engineer_schedule_calendar(callback: CallbackQuery, state: FSMContext):
+    payload = parse_calendar_callback(callback.data)
+    if not payload:
+        await callback.answer()
+        return
+
+    if payload.action in {"prev", "next"}:
+        new_year, new_month = shift_month(payload.year, payload.month, payload.action)
+        await callback.message.edit_reply_markup(
+            reply_markup=build_calendar(ENGINEER_CALENDAR_PREFIX, year=new_year, month=new_month)
+        )
+        await callback.answer()
+        return
+
+    if payload.action == "day" and payload.day:
+        selected = date(payload.year, payload.month, payload.day)
+        await state.update_data(schedule_date=selected.isoformat())
+        await state.set_state(EngineerStates.schedule_time)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await callback.message.answer(
+            f"Дата осмотра: {selected.strftime('%d.%m.%Y')}.\n"
+            "Введите время в формате ЧЧ:ММ или «-», если время пока не определено.\n"
+            "Можно добавить место после точки с запятой: 10:00; Склад №3."
+        )
+        await callback.answer(f"Выбрано {selected.strftime('%d.%m.%Y')}")
+        return
+
+    await callback.answer()
+
+
+@router.message(StateFilter(EngineerStates.schedule_time))
+async def engineer_schedule_time(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+    lowered = text.lower()
+    if lowered == "отмена":
+        await state.clear()
+        await message.answer("Действие отменено.")
+        return
+
+    parts = [part.strip() for part in text.split(";")]
+    time_part = parts[0] if parts else ""
+    location_part = parts[1] if len(parts) > 1 else None
+
+    if time_part == "-":
+        await _complete_engineer_schedule(
+            message,
+            state,
+            inspection_dt=None,
+            location=location_part,
+        )
+        return
+
+    try:
+        time_value = datetime.strptime(time_part, "%H:%M").time()
+    except ValueError:
+        await message.answer("Не удалось распознать время. Используйте формат ЧЧ:ММ.")
+        return
+
+    data = await state.get_data()
+    date_str = data.get("schedule_date")
+    if not date_str:
+        await message.answer("Сначала выберите дату через календарь.")
+        await state.set_state(EngineerStates.schedule_date)
+        await _prompt_schedule_calendar(message)
+        return
+
+    selected_date = date.fromisoformat(date_str)
+    inspection_dt = combine_moscow(selected_date, time_value)
+    await _complete_engineer_schedule(
+        message,
+        state,
+        inspection_dt=inspection_dt,
+        location=location_part,
+    )
+
+
+async def _complete_engineer_schedule(
+    message: Message,
+    state: FSMContext,
+    *,
+    inspection_dt: datetime | None,
+    location: str | None,
+) -> None:
+    data = await state.get_data()
+    request_id = data.get("request_id")
+    if not request_id:
+        await message.answer("Не удалось определить заявку. Начните процесс заново.")
+        await state.clear()
+        return
 
     async with async_session() as session:
         engineer = await _get_engineer(session, message.from_user.id)
@@ -193,13 +306,20 @@ async def engineer_schedule_datetime(message: Message, state: FSMContext):
             request,
             engineer_id=engineer.id,
             inspection_datetime=inspection_dt,
-            inspection_location=location_part or request.inspection_location,
+            inspection_location=location or request.inspection_location,
         )
         await session.commit()
+        request_number = request.number
 
-    await message.answer(
-        f"Осмотр по заявке {request.number} назначен на {inspection_dt.strftime('%d.%m.%Y %H:%M')}."
-    )
+    if inspection_dt:
+        inspection_text = format_moscow(inspection_dt) or "—"
+        main_line = f"Осмотр по заявке {request_number} назначен на {inspection_text}."
+    else:
+        main_line = f"Информация об осмотре заявки {request_number} обновлена."
+    if location:
+        main_line += f"\nМесто осмотра: {location}"
+
+    await message.answer(main_line)
     await state.clear()
     await _refresh_request_detail(message.bot, message.chat.id, message.from_user.id, request_id)
 
@@ -391,7 +511,7 @@ async def engineer_inspection_final_confirm(callback: CallbackQuery, state: FSMC
             request,
             engineer_id=engineer.id,
             notes=comment,
-            completed_at=datetime.now(timezone.utc),
+            completed_at=now_moscow(),
         )
         await session.commit()
 
@@ -1114,17 +1234,9 @@ def _format_request_detail(request: Request) -> str:
     status_title = STATUS_TITLES.get(request.status, request.status.value)
     master = request.master.full_name if request.master else "не назначен"
     object_name = request.object.name if request.object else request.address
-    due_text = request.due_at.strftime("%d.%m.%Y %H:%M") if request.due_at else "не задан"
-    inspection = (
-        request.inspection_scheduled_at.strftime("%d.%m.%Y %H:%M")
-        if request.inspection_scheduled_at
-        else "не назначен"
-    )
-    work_end = (
-        request.work_completed_at.strftime("%d.%m.%Y %H:%M")
-        if request.work_completed_at
-        else "—"
-    )
+    due_text = format_moscow(request.due_at) or "не задан"
+    inspection = format_moscow(request.inspection_scheduled_at) or "не назначен"
+    work_end = format_moscow(request.work_completed_at) or "—"
 
     planned_budget = float(request.planned_budget or 0)
     actual_budget = float(request.actual_budget or 0)
@@ -1191,7 +1303,7 @@ def _format_hours(value: float | None) -> str:
 def _build_engineer_analytics(requests: Sequence[Request]) -> str:
     from collections import Counter
 
-    now = datetime.now(timezone.utc)
+    now = now_moscow()
     counter = Counter(req.status for req in requests)
     total = len(requests)
     scheduled = counter.get(RequestStatus.INSPECTION_SCHEDULED, 0)
@@ -1237,7 +1349,8 @@ def _build_engineer_analytics(requests: Sequence[Request]) -> str:
         lines.append("")
         lines.append("⚠️ Срок устранения в ближайшие 72 часа:")
         for req in upcoming:
-            lines.append(f"• {req.number} — до {req.due_at.strftime('%d.%m.%Y %H:%M')}")
+            due_text = format_moscow(req.due_at) or "не задан"
+            lines.append(f"• {req.number} — до {due_text}")
 
     return "\n".join(lines)
 

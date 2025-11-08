@@ -1,10 +1,16 @@
+from __future__ import annotations
+
 from datetime import datetime
-from zoneinfo import ZoneInfo
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.db.models import Base
+from app.utils.timezone import now_moscow
+
+if TYPE_CHECKING:
+    from app.infrastructure.db.models.request import Request
 
 
 class Feedback(Base):
@@ -25,12 +31,10 @@ class Feedback(Base):
     # текстовый отзыв
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(ZoneInfo("Europe/Moscow"))
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_moscow)
 
     # связь с заявкой
-    request: Mapped["Request"] = relationship(back_populates="feedback")
+    request: Mapped[Request] = relationship(back_populates="feedback")
 
     def __repr__(self) -> str:
         return (
