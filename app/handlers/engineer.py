@@ -34,7 +34,7 @@ from app.infrastructure.db.models import (
 )
 from app.infrastructure.db.session import async_session
 from app.keyboards.calendar import build_calendar, parse_calendar_callback, shift_month
-from app.services.request_service import RequestService
+from app.services.request_service import RequestCreateData, RequestService
 from app.services.work_catalog import get_work_catalog
 from app.utils.timezone import combine_moscow, format_moscow, now_moscow
 
@@ -53,6 +53,16 @@ class EngineerStates(StatesGroup):
     inspection_final_confirm = State()  # Финальное подтверждение завершения осмотра
 
 
+class EngineerCreateStates(StatesGroup):
+    title = State()
+    object_name = State()
+    address = State()
+    apartment = State()
+    description = State()
+    phone = State()
+    confirmation = State()
+
+
 STATUS_TITLES = {
     RequestStatus.NEW: "Новая",
     RequestStatus.INSPECTION_SCHEDULED: "Назначен осмотр",
@@ -64,6 +74,204 @@ STATUS_TITLES = {
     RequestStatus.CLOSED: "Закрыта",
     RequestStatus.CANCELLED: "Отменена",
 }
+
+
+@router.message(F.text == "➕ Новая заявка")
+async def engineer_create_request(message: Message, state: FSMContext):
+    async with async_session() as session:
+        engineer = await _get_engineer(session, message.from_user.id)
+        if not engineer:
+            await message.answer("Создание доступно только инженерам.")
+            return
+
+    await state.clear()
+    await state.update_data(
+        engineer_id=engineer.id,
+        contact_person=engineer.full_name,
+        contact_phone=engineer.phone,
+    )
+    await state.set_state(EngineerCreateStates.title)
+    await message.answer(
+        "Начинаем упрощённое создание заявки.\n"
+        "1️⃣ Введите короткий заголовок (до 120 символов).\n"
+        "Для отмены напишите «Отмена».",
+    )
+
+
+@router.message(StateFilter(EngineerCreateStates.title))
+async def engineer_create_title(message: Message, state: FSMContext):
+    if await _maybe_cancel_engineer_creation(message, state):
+        return
+    title = (message.text or "").strip()
+    if not title:
+        await message.answer("Заголовок не может быть пустым. Попробуйте снова.")
+        return
+    if len(title) > 120:
+        await message.answer("Сократите заголовок до 120 символов.")
+        return
+
+    await state.update_data(title=title)
+    await state.set_state(EngineerCreateStates.object_name)
+    await message.answer(
+        "2️⃣ Укажите объект или ЖК (например, «ЖК Сириус, корпус 3»).\n"
+        "Для отмены напишите «Отмена».",
+    )
+
+
+@router.message(StateFilter(EngineerCreateStates.object_name))
+async def engineer_create_object(message: Message, state: FSMContext):
+    if await _maybe_cancel_engineer_creation(message, state):
+        return
+    object_name = (message.text or "").strip()
+    if not object_name:
+        await message.answer("Название объекта обязательно. Введите его ещё раз.")
+        return
+
+    await state.update_data(object_name=object_name)
+    await state.set_state(EngineerCreateStates.address)
+    await message.answer(
+        "3️⃣ Введите адрес (улица, дом, подъезд). Без квартиры — её спросим отдельно.\n"
+        "Для отмены напишите «Отмена».",
+    )
+
+
+@router.message(StateFilter(EngineerCreateStates.address))
+async def engineer_create_address(message: Message, state: FSMContext):
+    if await _maybe_cancel_engineer_creation(message, state):
+        return
+    address = (message.text or "").strip()
+    if not address:
+        await message.answer("Адрес обязателен. Введите его ещё раз.")
+        return
+
+    await state.update_data(address=address)
+    await state.set_state(EngineerCreateStates.apartment)
+    await message.answer(
+        "4️⃣ Укажите квартиру/помещение или отправьте «-», если не нужно.\n"
+        "Для отмены напишите «Отмена».",
+    )
+
+
+@router.message(StateFilter(EngineerCreateStates.apartment))
+async def engineer_create_apartment(message: Message, state: FSMContext):
+    if await _maybe_cancel_engineer_creation(message, state):
+        return
+    apartment = (message.text or "").strip()
+    await state.update_data(apartment=None if apartment == "-" else apartment)
+    await state.set_state(EngineerCreateStates.description)
+    await message.answer(
+        "5️⃣ Коротко опишите проблему или отправьте «-», если достаточно заголовка.\n"
+        "Для отмены напишите «Отмена».",
+    )
+
+
+@router.message(StateFilter(EngineerCreateStates.description))
+async def engineer_create_description(message: Message, state: FSMContext):
+    if await _maybe_cancel_engineer_creation(message, state):
+        return
+    description = (message.text or "").strip()
+    await state.update_data(description=None if description == "-" else description)
+    await state.set_state(EngineerCreateStates.phone)
+    await message.answer(
+        "6️⃣ Оставьте телефон для связи или «-», чтобы использовать номер из профиля.\n"
+        "Для отмены напишите «Отмена».",
+    )
+
+
+@router.message(StateFilter(EngineerCreateStates.phone))
+async def engineer_create_phone(message: Message, state: FSMContext):
+    if await _maybe_cancel_engineer_creation(message, state):
+        return
+    phone_text = (message.text or "").strip()
+    data = await state.get_data()
+
+    phone_value = phone_text
+    if phone_text == "-":
+        phone_value = data.get("contact_phone")
+        if not phone_value:
+            await message.answer("В профиле нет телефона. Введите номер вручную.")
+            return
+    if not phone_value:
+        await message.answer("Телефон обязателен. Введите его ещё раз.")
+        return
+
+    await state.update_data(contact_phone=phone_value)
+    await _send_engineer_creation_summary(message, state)
+
+
+@router.message(StateFilter(EngineerCreateStates.confirmation), F.text.lower() == "подтвердить")
+async def engineer_create_confirm(message: Message, state: FSMContext):
+    data = await state.get_data()
+    async with async_session() as session:
+        engineer = await _get_engineer(session, message.from_user.id)
+        if not engineer:
+            await message.answer("Нет доступа к созданию заявки.")
+            await state.clear()
+            return
+
+        create_data = RequestCreateData(
+            title=data["title"],
+            description=data.get("description") or data["title"],
+            object_name=data["object_name"],
+            address=data["address"],
+            apartment=data.get("apartment"),
+            contact_person=data.get("contact_person") or engineer.full_name,
+            contact_phone=data["contact_phone"],
+            specialist_id=engineer.id,
+            engineer_id=engineer.id,
+            remedy_term_days=14,
+        )
+        request = await RequestService.create_request(session, create_data)
+        await session.commit()
+
+    await message.answer(
+        f"✅ Заявка {request.number} создана. Вы назначены ответственным инженером.\n"
+        "Следите за статусом в разделе «📋 Мои заявки».",
+    )
+    await state.clear()
+
+
+@router.message(StateFilter(EngineerCreateStates.confirmation), F.text.lower() == "отмена")
+async def engineer_create_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Создание заявки отменено.")
+
+
+@router.message(StateFilter(EngineerCreateStates.confirmation))
+async def engineer_create_help(message: Message):
+    await message.answer("Отправьте «Подтвердить» для сохранения или «Отмена» для отмены.")
+
+
+async def _maybe_cancel_engineer_creation(message: Message, state: FSMContext) -> bool:
+    text = (message.text or "").strip().lower()
+    if text == "отмена":
+        await state.clear()
+        await message.answer("Создание заявки отменено.")
+        return True
+    return False
+
+
+async def _send_engineer_creation_summary(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    summary = _build_engineer_creation_summary(data)
+    await state.set_state(EngineerCreateStates.confirmation)
+    await message.answer(summary)
+
+
+def _build_engineer_creation_summary(data: dict) -> str:
+    apartment = data.get("apartment") or "—"
+    description = data.get("description") or data.get("title")
+    phone = data.get("contact_phone") or "—"
+    return (
+        "Проверьте данные заявки:\n"
+        f"• Заголовок: {data.get('title')}\n"
+        f"• Объект: {data.get('object_name')}\n"
+        f"• Адрес: {data.get('address')}\n"
+        f"• Квартира: {apartment}\n"
+        f"• Описание: {description}\n"
+        f"• Контакт: {data.get('contact_person')} / {phone}\n\n"
+        "Отправьте «Подтвердить» для создания или «Отмена», чтобы прервать."
+    )
 
 
 async def _prompt_schedule_calendar(message: Message):
