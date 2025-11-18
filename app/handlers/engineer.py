@@ -23,6 +23,7 @@ from app.handlers.common.work_fact_view import (
 )
 from app.infrastructure.db.models import (
     ActType,
+    Leader,
     Photo,
     PhotoType,
     Request,
@@ -79,7 +80,7 @@ async def engineer_requests(message: Message):
     async with async_session() as session:
         engineer = await _get_engineer(session, message.from_user.id)
         if not engineer:
-            await message.answer("Эта функция доступна только инженерам.")
+            await message.answer("Эта функция доступна только инженерам, специалистам и суперадминам.")
             return
 
         requests = await _load_engineer_requests(session, engineer.id)
@@ -116,6 +117,11 @@ async def engineer_request_detail(callback: CallbackQuery, state: FSMContext):
     if not request:
         await callback.message.edit_text("Заявка не найдена или больше не закреплена за вами.")
         await callback.answer()
+        return
+
+    # Проверяем, что пользователь действительно назначен как инженер на эту заявку
+    if request.engineer_id != engineer.id:
+        await callback.answer("Нет доступа к заявке.", show_alert=True)
         return
 
     # Save the last viewed request id into FSM so subsequent photos (even without
@@ -158,6 +164,19 @@ async def engineer_back_to_list(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("eng:schedule:"))
 async def engineer_schedule(callback: CallbackQuery, state: FSMContext):
     request_id = int(callback.data.split(":")[2])
+    
+    # Проверяем доступ к заявке
+    async with async_session() as session:
+        engineer = await _get_engineer(session, callback.from_user.id)
+        if not engineer:
+            await callback.answer("Нет доступа к заявке.", show_alert=True)
+            return
+        
+        request = await _load_request(session, engineer.id, request_id)
+        if not request:
+            await callback.answer("Заявка не найдена или больше не закреплена за вами.", show_alert=True)
+            return
+    
     await state.set_state(EngineerStates.schedule_date)
     await state.update_data(request_id=request_id)
     await _prompt_schedule_calendar(callback.message)
@@ -328,6 +347,18 @@ async def _complete_engineer_schedule(
 async def engineer_inspection(callback: CallbackQuery, state: FSMContext):
     """Начало процесса завершения осмотра."""
     request_id = int(callback.data.split(":")[2])
+    
+    # Проверяем доступ к заявке
+    async with async_session() as session:
+        engineer = await _get_engineer(session, callback.from_user.id)
+        if not engineer:
+            await callback.answer("Нет доступа к заявке.", show_alert=True)
+            return
+        
+        request = await _load_request(session, engineer.id, request_id)
+        if not request:
+            await callback.answer("Заявка не найдена или больше не закреплена за вами.", show_alert=True)
+            return
     
     # Сохраняем request_id и очищаем временные данные
     await state.set_state(EngineerStates.inspection_waiting_photos)
@@ -1008,7 +1039,7 @@ async def engineer_analytics(message: Message):
     async with async_session() as session:
         engineer = await _get_engineer(session, message.from_user.id)
         if not engineer:
-            await message.answer("Эта функция доступна только инженерам.")
+            await message.answer("Эта функция доступна только инженерам, специалистам и суперадминам.")
             return
 
         requests = await _load_engineer_requests(session, engineer.id)
@@ -1138,9 +1169,30 @@ async def engineer_inspection_restart_photos(callback: CallbackQuery, state: FSM
 
 
 async def _get_engineer(session, telegram_id: int) -> User | None:
-    return await session.scalar(
-        select(User).where(User.telegram_id == telegram_id, User.role == UserRole.ENGINEER)
+    """Получает пользователя, который может быть инженером (ENGINEER, SPECIALIST или MANAGER с is_super_admin)."""
+    user = await session.scalar(
+        select(User).where(User.telegram_id == telegram_id)
     )
+    if not user:
+        return None
+    
+    # Инженеры всегда имеют доступ
+    if user.role == UserRole.ENGINEER:
+        return user
+    
+    # Специалисты и суперадмины могут быть назначены как инженеры
+    if user.role == UserRole.SPECIALIST:
+        return user
+    
+    # Суперадмины (менеджеры с is_super_admin)
+    if user.role == UserRole.MANAGER:
+        leader = await session.scalar(
+            select(Leader).where(Leader.user_id == user.id, Leader.is_super_admin == True)
+        )
+        if leader:
+            return user
+    
+    return None
 
 
 

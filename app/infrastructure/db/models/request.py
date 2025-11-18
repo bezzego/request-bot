@@ -50,6 +50,7 @@ class Request(Base):
     customer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     address: Mapped[str] = mapped_column(String(512), nullable=False)
+    apartment: Mapped[str | None] = mapped_column(String(50), nullable=True)
     contact_person: Mapped[str] = mapped_column(String(255), nullable=False)
     contact_phone: Mapped[str] = mapped_column(String(50), nullable=False)
 

@@ -8,13 +8,15 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.infrastructure.db.models import (
     Act,
     ActType,
     DefectType,
+    Leader,
+    Object,
     Request,
     RequestStatus,
     User,
@@ -51,6 +53,50 @@ async def _get_defect_types(session) -> list[DefectType]:
     )
 
 
+async def _get_saved_objects(session, limit: int = 10) -> list[Object]:
+    """Получает список ранее использованных объектов (ЖК)."""
+    return (
+        (
+            await session.execute(
+                select(Object)
+                .order_by(Object.created_at.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def _get_saved_addresses(session, object_name: str | None = None, limit: int = 10) -> list[str]:
+    """Получает список ранее использованных адресов."""
+    # Используем GROUP BY вместо DISTINCT, чтобы можно было сортировать по created_at
+    if object_name:
+        # Если указан объект, ищем адреса для этого объекта
+        query = (
+            select(Request.address, func.max(Request.created_at).label('max_created_at'))
+            .join(Object, Request.object_id == Object.id)
+            .where(
+                Request.address.isnot(None),
+                func.lower(Object.name) == object_name.lower()
+            )
+            .group_by(Request.address)
+            .order_by(func.max(Request.created_at).desc())
+            .limit(limit)
+        )
+    else:
+        query = (
+            select(Request.address, func.max(Request.created_at).label('max_created_at'))
+            .where(Request.address.isnot(None))
+            .group_by(Request.address)
+            .order_by(func.max(Request.created_at).desc())
+            .limit(limit)
+        )
+    
+    result = await session.execute(query)
+    return [row[0] for row in result.all() if row[0]]
+
+
 def _defect_type_keyboard(defect_types: list[DefectType]):
     builder = InlineKeyboardBuilder()
     for defect in defect_types:
@@ -80,6 +126,7 @@ class NewRequestStates(StatesGroup):
     description = State()
     object_name = State()
     address = State()
+    apartment = State()
     contact_person = State()
     contact_phone = State()
     contract_number = State()
@@ -231,20 +278,145 @@ async def handle_title(message: Message, state: FSMContext):
 @router.message(StateFilter(NewRequestStates.description))
 async def handle_description(message: Message, state: FSMContext):
     await state.update_data(description=message.text.strip())
-    await state.set_state(NewRequestStates.object_name)
-    await message.answer("Укажите объект (например, ЖК «Север», корпус 3).")
+    
+    # Показываем сохранённые ЖК
+    async with async_session() as session:
+        saved_objects = await _get_saved_objects(session, limit=10)
+    
+    if saved_objects:
+        builder = InlineKeyboardBuilder()
+        for obj in saved_objects:
+            builder.button(
+                text=obj.name,
+                callback_data=f"spec:object:{obj.id}",
+            )
+        builder.button(text="✍️ Ввести вручную", callback_data="spec:object:manual")
+        builder.adjust(1)
+        await message.answer(
+            "Выберите ЖК из списка или введите вручную:",
+            reply_markup=builder.as_markup(),
+        )
+    else:
+        await state.set_state(NewRequestStates.object_name)
+        await message.answer("Укажите объект (например, ЖК «Север», корпус 3).")
+
+
+@router.callback_query(StateFilter(NewRequestStates.description), F.data.startswith("spec:object"))
+async def handle_object_choice(callback: CallbackQuery, state: FSMContext):
+    if callback.data == "spec:object:manual":
+        await state.set_state(NewRequestStates.object_name)
+        await callback.message.edit_reply_markup()
+        await callback.message.answer("Укажите объект (например, ЖК «Север», корпус 3).")
+        await callback.answer()
+        return
+    
+    if callback.data.startswith("spec:object:"):
+        try:
+            object_id = int(callback.data.split(":")[2])
+            async with async_session() as session:
+                obj = await session.get(Object, object_id)
+                if obj:
+                    object_name = obj.name
+                    await state.update_data(object_name=object_name)
+                    await callback.message.edit_text(f"ЖК: {object_name}")
+                    
+                    # Показываем сохранённые адреса для этого ЖК
+                    saved_addresses = await _get_saved_addresses(session, object_name=object_name, limit=10)
+                    
+                    if saved_addresses:
+                        await state.update_data(saved_addresses=saved_addresses)
+                        await state.set_state(NewRequestStates.object_name)  # Остаёмся в этом состоянии для обработки адреса
+                        builder = InlineKeyboardBuilder()
+                        for idx, addr in enumerate(saved_addresses):
+                            builder.button(
+                                text=addr[:50],
+                                callback_data=f"spec:address_idx:{idx}",
+                            )
+                        builder.button(text="✍️ Ввести вручную", callback_data="spec:address:manual")
+                        builder.adjust(1)
+                        await callback.message.answer(
+                            "Выберите адрес из списка или введите вручную:",
+                            reply_markup=builder.as_markup(),
+                        )
+                    else:
+                        await state.set_state(NewRequestStates.address)
+                        await callback.message.answer("Укажите адрес объекта.")
+                    await callback.answer()
+                    return
+        except (ValueError, IndexError):
+            pass
+    
+    await callback.answer("Ошибка выбора ЖК. Попробуйте снова.", show_alert=True)
 
 
 @router.message(StateFilter(NewRequestStates.object_name))
 async def handle_object(message: Message, state: FSMContext):
-    await state.update_data(object_name=message.text.strip())
-    await state.set_state(NewRequestStates.address)
-    await message.answer("Укажите адрес объекта.")
+    object_name = message.text.strip()
+    await state.update_data(object_name=object_name)
+    
+    # Показываем сохранённые адреса для этого ЖК
+    async with async_session() as session:
+        saved_addresses = await _get_saved_addresses(session, object_name=object_name, limit=10)
+    
+    if saved_addresses:
+        # Сохраняем адреса в state для использования в callback
+        await state.update_data(saved_addresses=saved_addresses)
+        builder = InlineKeyboardBuilder()
+        for idx, addr in enumerate(saved_addresses):
+            builder.button(
+                text=addr[:50],  # Ограничиваем длину текста кнопки
+                callback_data=f"spec:address_idx:{idx}",
+            )
+        builder.button(text="✍️ Ввести вручную", callback_data="spec:address:manual")
+        builder.adjust(1)
+        await message.answer(
+            "Выберите адрес из списка или введите вручную:",
+            reply_markup=builder.as_markup(),
+        )
+    else:
+        await state.set_state(NewRequestStates.address)
+        await message.answer("Укажите адрес объекта.")
+
+
+@router.callback_query(StateFilter(NewRequestStates.object_name), F.data.startswith("spec:address"))
+async def handle_address_choice(callback: CallbackQuery, state: FSMContext):
+    if callback.data == "spec:address:manual":
+        await state.set_state(NewRequestStates.address)
+        await callback.message.edit_reply_markup()
+        await callback.message.answer("Укажите адрес объекта.")
+        await callback.answer()
+        return
+    
+    if callback.data.startswith("spec:address_idx:"):
+        data = await state.get_data()
+        saved_addresses = data.get("saved_addresses", [])
+        try:
+            idx = int(callback.data.split(":")[2])
+            if 0 <= idx < len(saved_addresses):
+                address = saved_addresses[idx]
+                await state.update_data(address=address, saved_addresses=None)
+                await state.set_state(NewRequestStates.apartment)
+                await callback.message.edit_text(f"Адрес: {address}")
+                await callback.message.answer("Укажите номер квартиры (или отправьте «-», если не применимо).")
+                await callback.answer()
+                return
+        except (ValueError, IndexError):
+            pass
+    
+    await callback.answer("Ошибка выбора адреса. Попробуйте снова.", show_alert=True)
 
 
 @router.message(StateFilter(NewRequestStates.address))
 async def handle_address(message: Message, state: FSMContext):
     await state.update_data(address=message.text.strip())
+    await state.set_state(NewRequestStates.apartment)
+    await message.answer("Укажите номер квартиры (или отправьте «-», если не применимо).")
+
+
+@router.message(StateFilter(NewRequestStates.apartment))
+async def handle_apartment(message: Message, state: FSMContext):
+    apartment = message.text.strip()
+    await state.update_data(apartment=None if apartment == "-" else apartment)
     await state.set_state(NewRequestStates.contact_person)
     await message.answer("Контактное лицо на объекте (ФИО).")
 
@@ -374,30 +546,66 @@ async def handle_inspection_location(message: Message, state: FSMContext):
     await state.update_data(inspection_location=None if location == "-" else location)
 
     async with async_session() as session:
-        engineers = (
-            await session.execute(
-                select(User).where(User.role == UserRole.ENGINEER).order_by(User.full_name)
-            )
-        ).scalars().all()
+        data = await state.get_data()
+        specialist_id = data.get("specialist_id")
+        
+        # Получаем инженеров
+        engineers_query = select(User).where(User.role == UserRole.ENGINEER)
+        
+        # Получаем суперадминов (менеджеры с is_super_admin = True)
+        superadmins_query = (
+            select(User)
+            .join(Leader, User.id == Leader.user_id)
+            .where(User.role == UserRole.MANAGER, Leader.is_super_admin == True)
+        )
+        
+        # Объединяем запросы
+        engineers_result = await session.execute(engineers_query)
+        engineers = list(engineers_result.scalars().all())
+        
+        superadmins_result = await session.execute(superadmins_query)
+        superadmins = list(superadmins_result.scalars().all())
+        
+        # Получаем самого специалиста, если он не инженер и не суперадмин
+        specialist = None
+        if specialist_id:
+            specialist = await session.get(User, specialist_id)
+            if specialist:
+                # Проверяем, не является ли он уже в списке
+                engineer_ids = {eng.id for eng in engineers}
+                superadmin_ids = {sa.id for sa in superadmins}
+                if specialist.id not in engineer_ids and specialist.id not in superadmin_ids:
+                    # Добавляем специалиста в список
+                    engineers.append(specialist)
+                else:
+                    specialist = None  # Уже в списке, не добавляем отдельно
 
-    if not engineers:
+    # Объединяем всех кандидатов
+    all_candidates = engineers + superadmins
+    if specialist and specialist not in all_candidates:
+        all_candidates.append(specialist)
+    
+    if not all_candidates:
         await message.answer("Нет доступных инженеров. Обратитесь к руководителю.")
         await state.clear()
         return
 
+    # Сортируем по имени
+    all_candidates.sort(key=lambda u: u.full_name)
+    
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"{eng.full_name}",
-                    callback_data=f"assign_engineer:{eng.id}",
+                    text=f"{user.full_name}{' (я)' if specialist and user.id == specialist.id else ''}",
+                    callback_data=f"assign_engineer:{user.id}",
                 )
             ]
-            for eng in engineers
+            for user in all_candidates
         ]
     )
     await state.set_state(NewRequestStates.engineer)
-    await message.answer("Выберите инженера для заявки:", reply_markup=kb)
+    await message.answer("Выберите ответственного инженера для заявки:", reply_markup=kb)
 
 
 @router.callback_query(StateFilter(NewRequestStates.engineer), F.data.startswith("assign_engineer:"))
@@ -467,6 +675,7 @@ async def confirm_request(message: Message, state: FSMContext):
             description=data["description"],
             object_name=data["object_name"],
             address=data["address"],
+            apartment=data.get("apartment"),
             contact_person=data["contact_person"],
             contact_phone=data["contact_phone"],
             contract_number=data.get("contract_number"),
@@ -548,11 +757,13 @@ def _build_request_summary(data: dict) -> str:
 
     letter_text = "приложено" if data.get("letter_file_id") else "нет"
 
+    apartment_text = data.get('apartment') or '—'
     return (
         "Проверьте данные:\n"
         f"🔹 Заголовок: {data['title']}\n"
         f"🔹 Объект: {data['object_name']}\n"
         f"🔹 Адрес: {data['address']}\n"
+        f"🔹 Квартира: {apartment_text}\n"
         f"🔹 Контакт: {data['contact_person']} / {data['contact_phone']}\n"
         f"🔹 Договор: {data.get('contract_number') or '—'}\n"
         f"🔹 Тип дефекта: {data.get('defect_type') or '—'}\n"

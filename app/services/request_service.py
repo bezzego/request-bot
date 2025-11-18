@@ -40,6 +40,7 @@ class RequestCreateData:
     contact_phone: str
     specialist_id: int
     engineer_id: int
+    apartment: str | None = None
     defect_type_name: str | None = None
     contract_number: str | None = None
     contract_description: str | None = None
@@ -97,6 +98,7 @@ class RequestService:
             contract=contract_ref,
             defect_type=defect_ref,
             address=data.address,
+            apartment=data.apartment,
             contact_person=data.contact_person,
             contact_phone=data.contact_phone,
             inspection_scheduled_at=inspection_dt,

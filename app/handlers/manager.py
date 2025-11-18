@@ -8,7 +8,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.infrastructure.db.models import Request, User, UserRole
+from app.infrastructure.db.models import Leader, Request, User, UserRole
 from app.infrastructure.db.session import async_session
 from app.services.export import ExportService
 from app.services.reporting import ReportingService
@@ -21,9 +21,9 @@ router = Router()
 @router.message(F.text == "👥 Управление пользователями")
 async def manager_users(message: Message):
     async with async_session() as session:
-        manager = await _get_manager(session, message.from_user.id)
+        manager = await _get_super_admin(session, message.from_user.id)
         if not manager:
-            await message.answer("Доступно только руководителям.")
+            await message.answer("Доступно только супер-администраторам.")
             return
 
         users = (
@@ -59,7 +59,7 @@ async def manager_pick_role(callback: CallbackQuery):
     user_id = int(callback.data.split(":")[2])
 
     async with async_session() as session:
-        manager = await _get_manager(session, callback.from_user.id)
+        manager = await _get_super_admin(session, callback.from_user.id)
         if not manager:
             await callback.answer("Нет доступа.", show_alert=True)
             return
@@ -102,7 +102,7 @@ async def manager_set_role(callback: CallbackQuery):
         return
 
     async with async_session() as session:
-        manager = await _get_manager(session, callback.from_user.id)
+        manager = await _get_super_admin(session, callback.from_user.id)
         if not manager:
             await callback.answer("Нет доступа.", show_alert=True)
             return
@@ -130,9 +130,9 @@ async def manager_reports(message: Message):
     start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
     async with async_session() as session:
-        manager = await _get_manager(session, message.from_user.id)
+        manager = await _get_super_admin(session, message.from_user.id)
         if not manager:
-            await message.answer("Доступно только руководителям.")
+            await message.answer("Доступно только супер-администраторам.")
             return
 
         summary = await ReportingService.period_summary(session, start=start, end=now)
@@ -174,7 +174,7 @@ async def manager_reports(message: Message):
 @router.message(F.text == "📋 Все заявки")
 async def manager_all_requests(message: Message):
     async with async_session() as session:
-        manager = await _get_manager(session, message.from_user.id)
+        manager = await _get_super_admin(session, message.from_user.id)
         if not manager:
             await message.answer("Доступ ограничен.")
             return
@@ -213,8 +213,14 @@ async def manager_all_requests(message: Message):
     await message.answer("\n".join(lines))
 
 
-@router.message(F.text == "📤 Экспорт CSV")
+@router.message(F.text == "📤 Экспорт Excel")
 async def manager_export_prompt(message: Message):
+    async with async_session() as session:
+        manager = await _get_super_admin(session, message.from_user.id)
+        if not manager:
+            await message.answer("Доступно только супер-администраторам.")
+            return
+
     builder = InlineKeyboardBuilder()
     for days in (30, 90, 180):
         builder.button(text=f"За {days} дней", callback_data=f"manager:export:{days}")
@@ -237,7 +243,7 @@ async def manager_export(callback: CallbackQuery):
     start = end - timedelta(days=period_days)
 
     async with async_session() as session:
-        manager = await _get_manager(session, callback.from_user.id)
+        manager = await _get_super_admin(session, callback.from_user.id)
         if not manager:
             await callback.answer("Нет доступа.", show_alert=True)
             return
@@ -247,14 +253,21 @@ async def manager_export(callback: CallbackQuery):
     await callback.answer("Файл сформирован.")
     await callback.message.answer_document(
         FSInputFile(path),
-        caption=f"Выгрузка заявок за последние {period_days} дней",
+        caption=f"Excel-выгрузка заявок за последние {period_days} дней",
     )
 
 
 # --- служебные функции ---
 
 
-async def _get_manager(session, telegram_id: int) -> User | None:
-    return await session.scalar(
-        select(User).where(User.telegram_id == telegram_id, User.role == UserRole.MANAGER)
+async def _get_super_admin(session, telegram_id: int) -> User | None:
+    stmt = (
+        select(User)
+        .join(Leader, Leader.user_id == User.id)
+        .where(
+            User.telegram_id == telegram_id,
+            User.role == UserRole.MANAGER,
+            Leader.is_super_admin.is_(True),
+        )
     )
+    return await session.scalar(stmt)

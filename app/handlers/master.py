@@ -941,7 +941,20 @@ async def master_photo(message: Message):
 
 
 @router.message(F.location)
-async def master_location(message: Message):
+async def master_location(message: Message, state: FSMContext):
+    """Обработка геопозиции в обычном режиме (не в процессе начала/завершения работы)."""
+    # Пропускаем обработку, если мастер находится в специальных состояниях
+    # (специфичные обработчики для этих состояний обработают геопозицию)
+    current_state = await state.get_state()
+    if current_state:
+        state_str = str(current_state)
+        if (
+            "waiting_start_location" in state_str
+            or "waiting_finish_location" in state_str
+        ):
+            # Геопозиция будет обработана специфичными обработчиками для этих состояний
+            return
+    
     async with async_session() as session:
         master = await _get_master(session, message.from_user.id)
         if not master:
