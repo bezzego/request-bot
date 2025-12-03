@@ -24,6 +24,7 @@ from app.infrastructure.db.models import (
     WorkSession,
 )
 from app.services.work_catalog import WorkCatalogItem
+from app.services.material_catalog import MaterialCatalogItem
 from app.utils.identifiers import generate_request_number
 from app.utils.timezone import now_moscow, to_moscow
 
@@ -737,6 +738,122 @@ class RequestService:
             to_status=request.status,
             changed_by_id=author_id,
             comment=f"Обновлён план по каталогу «{catalog_item.name}»",
+        )
+        return work_item
+
+    @staticmethod
+    async def add_plan_from_material_catalog(
+        session: AsyncSession,
+        request: Request,
+        *,
+        catalog_item: MaterialCatalogItem,
+        planned_quantity: float,
+        author_id: int,
+    ) -> WorkItem:
+        """Добавляет или обновляет плановую позицию материала из каталога."""
+        stmt = select(WorkItem).where(
+            WorkItem.request_id == request.id,
+            func.lower(WorkItem.name) == catalog_item.name.lower(),
+        )
+        result = await session.execute(stmt)
+        work_item = result.scalars().first()
+
+        category_label = " / ".join(catalog_item.path[:-1]) or None
+        planned_material_cost = float(round(catalog_item.price * planned_quantity, 2))
+
+        if not work_item:
+            work_item = WorkItem(
+                request_id=request.id,
+                name=catalog_item.name,
+                category=category_label,
+                unit=catalog_item.unit,
+                planned_quantity=float(planned_quantity),
+                planned_material_cost=planned_material_cost,
+            )
+            session.add(work_item)
+        else:
+            work_item.category = work_item.category or category_label
+            work_item.unit = catalog_item.unit or work_item.unit
+            work_item.planned_quantity = float(planned_quantity)
+            work_item.planned_material_cost = planned_material_cost
+
+        await session.flush()
+        await RequestService._recalculate_budget(session, request)
+
+        await RequestService._register_stage(
+            session=session,
+            request=request,
+            to_status=request.status,
+            changed_by_id=author_id,
+            comment=f"Добавлен план материала по каталогу «{catalog_item.name}»",
+        )
+        return work_item
+
+    @staticmethod
+    async def update_actual_from_material_catalog(
+        session: AsyncSession,
+        request: Request,
+        *,
+        catalog_item: MaterialCatalogItem,
+        actual_quantity: float,
+        author_id: int,
+    ) -> WorkItem:
+        """Обновляет фактические данные по материалу из каталога."""
+        norm_target = _normalize_work_item_name(catalog_item.name)
+        stmt = (
+            select(WorkItem)
+            .where(WorkItem.request_id == request.id)
+            .order_by(WorkItem.id.asc())
+        )
+        result = await session.execute(stmt)
+        candidates = [item for item in result.scalars().all() if _normalize_work_item_name(item.name) == norm_target]
+
+        work_item: WorkItem | None = None
+        duplicates: list[WorkItem] = []
+        for candidate in candidates:
+            if work_item is None:
+                work_item = candidate
+                continue
+            if _has_plan_data(candidate) and not _has_plan_data(work_item):
+                duplicates.append(work_item)
+                work_item = candidate
+            else:
+                duplicates.append(candidate)
+
+        category_label = " / ".join(catalog_item.path[:-1]) or None
+
+        if not work_item:
+            work_item = WorkItem(
+                request_id=request.id,
+                name=catalog_item.name,
+                category=category_label,
+                unit=catalog_item.unit,
+                planned_quantity=None,
+                planned_hours=None,
+                planned_cost=None,
+                planned_material_cost=None,
+            )
+            session.add(work_item)
+        else:
+            for duplicate in duplicates:
+                if not work_item.notes and duplicate.notes:
+                    work_item.notes = duplicate.notes
+                await session.delete(duplicate)
+
+        work_item.category = work_item.category or category_label
+        work_item.unit = catalog_item.unit or work_item.unit
+        work_item.actual_quantity = float(actual_quantity)
+        work_item.actual_material_cost = float(round(catalog_item.price * actual_quantity, 2))
+
+        await session.flush()
+        await RequestService._recalculate_budget(session, request)
+
+        await RequestService._register_stage(
+            session=session,
+            request=request,
+            to_status=request.status,
+            changed_by_id=author_id,
+            comment=f"Обновлены факты по материалу из каталога «{catalog_item.name}»",
         )
         return work_item
 

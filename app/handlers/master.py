@@ -560,6 +560,40 @@ async def master_finish_location_fallback(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("master:update_fact:"))
 async def master_update_fact(callback: CallbackQuery):
+    """Предлагает выбрать между работой и материалом для обновления факта."""
+    request_id = int(callback.data.split(":")[2])
+    async with async_session() as session:
+        master = await _get_master(session, callback.from_user.id)
+        if not master:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+
+        request = await _load_request(session, master.id, request_id)
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+
+        header = _catalog_header(request)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🔧 Обновить работу",
+        callback_data=f"master:update_fact_work:{request_id}",
+    )
+    builder.button(
+        text="📦 Обновить материал",
+        callback_data=f"master:update_fact_material:{request_id}",
+    )
+    builder.adjust(1)
+    
+    text = f"{header}\n\nВыберите тип позиции для обновления факта:"
+    await callback.message.answer(text, reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("master:update_fact_work:"))
+async def master_update_fact_work(callback: CallbackQuery):
+    """Открывает каталог работ для обновления факта."""
     request_id = int(callback.data.split(":")[2])
     async with async_session() as session:
         master = await _get_master(session, callback.from_user.id)
@@ -583,6 +617,202 @@ async def master_update_fact(callback: CallbackQuery):
         request_id=request_id,
     )
     await callback.message.answer(text, reply_markup=markup)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("master:update_fact_material:"))
+async def master_update_fact_material(callback: CallbackQuery):
+    """Открывает каталог материалов для обновления факта."""
+    request_id = int(callback.data.split(":")[2])
+    async with async_session() as session:
+        master = await _get_master(session, callback.from_user.id)
+        if not master:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+
+        request = await _load_request(session, master.id, request_id)
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+
+        header = _catalog_header(request)
+
+    from app.services.material_catalog import get_material_catalog
+    catalog = get_material_catalog()
+    text = f"{header}\n\n{format_category_message(None, is_material=True)}"
+    markup = build_category_keyboard(
+        catalog=catalog,
+        category=None,
+        role_key="mm",  # mm = master material
+        request_id=request_id,
+        is_material=True,
+    )
+    await callback.message.answer(text, reply_markup=markup)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("material:mm:"))
+async def master_material_catalog(callback: CallbackQuery, state: FSMContext):
+    """Обработчик каталога материалов для обновления факта мастером."""
+    parts = callback.data.split(":")
+    if len(parts) < 4:
+        await callback.answer()
+        return
+
+    _, role_key, request_id_str, action, *rest = parts
+    if role_key != "mm":
+        await callback.answer()
+        return
+
+    try:
+        request_id = int(request_id_str)
+    except ValueError:
+        await callback.answer("Некорректный идентификатор заявки.", show_alert=True)
+        return
+
+    from app.services.material_catalog import get_material_catalog
+    catalog = get_material_catalog()
+
+    async with async_session() as session:
+        master = await _get_master(session, callback.from_user.id)
+        if not master:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+
+        request = await _load_request(session, master.id, request_id)
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+
+        header = _catalog_header(request)
+
+        if action in {"browse", "back"}:
+            target = rest[0] if rest else "root"
+            category = None if target == "root" else catalog.get_category(target)
+            if target != "root" and not category:
+                await callback.answer("Категория недоступна.", show_alert=True)
+                return
+
+            text = f"{header}\n\n{format_category_message(category, is_material=True)}"
+            markup = build_category_keyboard(
+                catalog=catalog,
+                category=category,
+                role_key="mm",
+                request_id=request_id,
+                is_material=True,
+            )
+            await _update_catalog_message(callback.message, text, markup)
+            await callback.answer()
+            return
+
+        if action == "item":
+            if not rest:
+                await callback.answer()
+                return
+            item_id = rest[0]
+            catalog_item = catalog.get_item(item_id)
+            if not catalog_item:
+                await callback.answer("Материал не найден в каталоге.", show_alert=True)
+                return
+
+            work_item = await _get_work_item(session, request.id, catalog_item.name)
+            current_quantity = (
+                float(work_item.actual_quantity)
+                if work_item and work_item.actual_quantity is not None
+                else None
+            )
+            new_quantity = current_quantity or 0.0
+
+            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=current_quantity, is_material=True)}"
+            markup = build_quantity_keyboard(
+                catalog_item=catalog_item,
+                role_key="mm",
+                request_id=request_id,
+                new_quantity=new_quantity,
+                is_material=True,
+            )
+            await _update_catalog_message(callback.message, text, markup)
+            await callback.answer()
+            return
+
+        if action == "qty":
+            if len(rest) < 2:
+                await callback.answer()
+                return
+            item_id, quantity_code = rest[:2]
+            catalog_item = catalog.get_item(item_id)
+            if not catalog_item:
+                await callback.answer("Материал не найден в каталоге.", show_alert=True)
+                return
+
+            new_quantity = decode_quantity(quantity_code)
+            work_item = await _get_work_item(session, request.id, catalog_item.name)
+            current_quantity = (
+                float(work_item.actual_quantity)
+                if work_item and work_item.actual_quantity is not None
+                else None
+            )
+
+            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=current_quantity, is_material=True)}"
+            markup = build_quantity_keyboard(
+                catalog_item=catalog_item,
+                role_key="mm",
+                request_id=request_id,
+                new_quantity=new_quantity,
+                is_material=True,
+            )
+            await _update_catalog_message(callback.message, text, markup)
+            await callback.answer()
+            return
+
+        if action == "save":
+            if len(rest) < 2:
+                await callback.answer()
+                return
+            item_id, quantity_code = rest[:2]
+            catalog_item = catalog.get_item(item_id)
+            if not catalog_item:
+                await callback.answer("Материал не найден в каталоге.", show_alert=True)
+                return
+
+            new_quantity = decode_quantity(quantity_code)
+            await RequestService.update_actual_from_material_catalog(
+                session,
+                request,
+                catalog_item=catalog_item,
+                actual_quantity=new_quantity,
+                author_id=master.id,
+            )
+            await session.commit()
+
+            finish_context = await _load_finish_context(state)
+            if finish_context and finish_context.get("request_id") == request_id:
+                finish_context["fact_confirmed"] = True
+                await _save_finish_context(state, finish_context)
+
+            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=new_quantity, is_material=True)}"
+            markup = build_quantity_keyboard(
+                catalog_item=catalog_item,
+                role_key="mm",
+                request_id=request_id,
+                new_quantity=new_quantity,
+                is_material=True,
+            )
+            await _update_catalog_message(callback.message, text, markup)
+            await callback.answer(f"Сохранено {new_quantity:.2f}")
+
+            await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
+            await _refresh_finish_summary_from_context(callback.bot, state, request_id=request_id)
+            return
+
+        if action == "close":
+            try:
+                await callback.message.delete()
+            except Exception:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.answer()
+            return
+
     await callback.answer()
 
 
