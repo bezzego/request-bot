@@ -5,6 +5,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Numeric,
     String,
     Text,
@@ -42,6 +43,7 @@ class Request(Base):
         Enum(RequestStatus),
         default=RequestStatus.NEW,
         nullable=False,
+        index=True,
     )
 
     object_id: Mapped[int | None] = mapped_column(ForeignKey("objects.id"), nullable=True)
@@ -65,7 +67,7 @@ class Request(Base):
     work_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completion_notes: Mapped[str | None] = mapped_column(Text)
 
-    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     remedy_term_days: Mapped[int] = mapped_column(default=14, nullable=False)
 
     planned_budget: Mapped[float | None] = mapped_column(Numeric(12, 2))
@@ -76,14 +78,15 @@ class Request(Base):
     sheet_row_number: Mapped[int | None] = mapped_column(nullable=True)
     sheet_url: Mapped[str | None] = mapped_column(String(255))
 
-    specialist_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
-    engineer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    master_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    specialist_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    engineer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    master_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=now_moscow,
         nullable=False,
+        index=True,
     )
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
@@ -146,3 +149,11 @@ class Request(Base):
             f"<Request id={self.id} number={self.number!r} "
             f"status={self.status} specialist_id={self.specialist_id}>"
         )
+
+
+# Составные индексы для оптимизации частых запросов
+Index("ix_requests_specialist_created", Request.specialist_id, Request.created_at)
+Index("ix_requests_engineer_status", Request.engineer_id, Request.status)
+Index("ix_requests_master_status", Request.master_id, Request.status)
+Index("ix_requests_status_created", Request.status, Request.created_at)
+Index("ix_requests_due_at_status", Request.due_at, Request.status)

@@ -171,6 +171,39 @@ async def manager_reports(message: Message):
     await message.answer("\n".join(lines))
 
 
+@router.message(F.text == "📋 Мои заявки")
+async def manager_my_requests(message: Message):
+    """Обработчик для просмотра заявок суперадмина (использует функции специалиста)."""
+    from app.handlers.specialist import _get_specialist, _load_specialist_requests
+    
+    async with async_session() as session:
+        specialist_or_admin = await _get_specialist(session, message.from_user.id)
+        if not specialist_or_admin:
+            await message.answer("Эта функция доступна только специалистам отдела и суперадминам.")
+            return
+
+        requests = await _load_specialist_requests(session, specialist_or_admin.id)
+
+    if not requests:
+        await message.answer("У вас пока нет заявок. Создайте первую через «➕ Создать заявку».")
+        return
+
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    builder = InlineKeyboardBuilder()
+    for req in requests:
+        status = req.status.value
+        builder.button(
+            text=f"{req.number} · {status}",
+            callback_data=f"spec:detail:{req.id}",
+        )
+    builder.adjust(1)
+
+    await message.answer(
+        "Выберите заявку, чтобы посмотреть подробности и актуальный статус.",
+        reply_markup=builder.as_markup(),
+    )
+
+
 @router.message(F.text == "📋 Все заявки")
 async def manager_all_requests(message: Message):
     async with async_session() as session:

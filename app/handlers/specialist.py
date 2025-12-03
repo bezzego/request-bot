@@ -33,12 +33,24 @@ SPEC_CALENDAR_PREFIX = "spec_inspection"
 
 
 async def _get_specialist(session, telegram_id: int) -> User | None:
-    return await session.scalar(
-        select(User).where(
-            User.telegram_id == telegram_id,
-            User.role == UserRole.SPECIALIST,
-        )
+    """Получает специалиста или суперадмина."""
+    user = await session.scalar(
+        select(User)
+        .options(selectinload(User.leader_profile))
+        .where(User.telegram_id == telegram_id)
     )
+    if not user:
+        return None
+    
+    # Проверяем, является ли пользователь специалистом
+    if user.role == UserRole.SPECIALIST:
+        return user
+    
+    # Проверяем, является ли пользователь суперадмином
+    if user.role == UserRole.MANAGER and user.leader_profile and user.leader_profile.is_super_admin:
+        return user
+    
+    return None
 
 
 async def _get_defect_types(session) -> list[DefectType]:
@@ -145,7 +157,7 @@ async def specialist_requests(message: Message):
     async with async_session() as session:
         specialist = await _get_specialist(session, message.from_user.id)
         if not specialist:
-            await message.answer("Эта функция доступна только специалистам отдела.")
+            await message.answer("Эта функция доступна только специалистам отдела и суперадминам.")
             return
 
         requests = await _load_specialist_requests(session, specialist.id)
@@ -238,7 +250,7 @@ async def specialist_analytics(message: Message):
     async with async_session() as session:
         specialist = await _get_specialist(session, message.from_user.id)
         if not specialist:
-            await message.answer("Эта функция доступна только специалистам отдела.")
+            await message.answer("Эта функция доступна только специалистам отдела и суперадминам.")
             return
 
         requests = await _load_specialist_requests(session, specialist.id)
@@ -254,10 +266,27 @@ async def specialist_analytics(message: Message):
 @router.message(F.text == "➕ Создать заявку")
 async def start_new_request(message: Message, state: FSMContext):
     async with async_session() as session:
-        user = await session.scalar(select(User).where(User.telegram_id == message.from_user.id))
-        if not user or user.role != UserRole.SPECIALIST:
-            await message.answer("Эта функция доступна только специалистам отдела.")
+        user = await session.scalar(
+            select(User)
+            .options(selectinload(User.leader_profile))
+            .where(User.telegram_id == message.from_user.id)
+        )
+        if not user:
+            await message.answer("Пользователь не найден.")
             return
+        
+        # Проверяем, является ли пользователь специалистом или суперадмином
+        is_specialist = user.role == UserRole.SPECIALIST
+        is_super_admin = (
+            user.role == UserRole.MANAGER 
+            and user.leader_profile 
+            and user.leader_profile.is_super_admin
+        )
+        
+        if not (is_specialist or is_super_admin):
+            await message.answer("Эта функция доступна только специалистам отдела и суперадминам.")
+            return
+        
         await state.set_state(NewRequestStates.title)
         await state.update_data(specialist_id=user.id)
 

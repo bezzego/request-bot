@@ -2,8 +2,9 @@ from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
 manager_kb = ReplyKeyboardMarkup(
     keyboard=[
+        [KeyboardButton(text="➕ Создать заявку")],
+        [KeyboardButton(text="📄 Мои заявки"), KeyboardButton(text="📋 Все заявки")],
         [KeyboardButton(text="📊 Отчёты и статистика"), KeyboardButton(text="📤 Экспорт Excel")],
-        [KeyboardButton(text="📋 Все заявки"), KeyboardButton(text="📋 Мои заявки")],
         [KeyboardButton(text="👥 Управление пользователями")],
     ],
     resize_keyboard=True,
