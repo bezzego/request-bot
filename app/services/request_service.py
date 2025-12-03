@@ -467,13 +467,46 @@ class RequestService:
         return request
 
     @staticmethod
+    async def can_close_request(request: Request) -> tuple[bool, list[str]]:
+        """
+        Проверяет, можно ли закрыть заявку.
+        Возвращает (можно_ли_закрыть, список_причин_если_нельзя).
+        """
+        reasons = []
+        
+        # Проверяем статус - заявка должна быть завершена или готова к подписанию
+        if request.status not in {RequestStatus.COMPLETED, RequestStatus.READY_FOR_SIGN}:
+            reasons.append(
+                f"Заявка должна быть в статусе 'Работы завершены' или 'Ожидает подписания', "
+                f"текущий статус: {request.status.value}"
+            )
+        
+        # Проверяем, что работы завершены
+        if not request.work_completed_at:
+            reasons.append("Работы должны быть завершены мастером")
+        
+        # Проверяем, что мастер назначен и завершил работы
+        if not request.master_id:
+            reasons.append("Мастер не назначен")
+        
+        # Проверяем, что инженер провёл осмотр
+        if not request.inspection_completed_at:
+            reasons.append("Осмотр должен быть завершён инженером")
+        
+        return len(reasons) == 0, reasons
+
+    @staticmethod
     async def close_request(
         session: AsyncSession,
         request: Request,
-        manager_id: int,
+        user_id: int,
         comment: str | None = None,
     ) -> Request:
-        """Окончательно закрывает заявку руководителем."""
+        """Окончательно закрывает заявку специалистом или суперадмином."""
+        can_close, reasons = await RequestService.can_close_request(request)
+        if not can_close:
+            raise ValueError(f"Заявку нельзя закрыть: {', '.join(reasons)}")
+        
         previous_status = request.status
         request.status = RequestStatus.CLOSED
         await session.flush()
@@ -483,8 +516,8 @@ class RequestService:
             request=request,
             from_status=previous_status,
             to_status=RequestStatus.CLOSED,
-            changed_by_id=manager_id,
-            comment=comment or "Заявка закрыта руководителем",
+            changed_by_id=user_id,
+            comment=comment or "Заявка закрыта специалистом",
         )
         return request
 

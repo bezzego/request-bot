@@ -152,6 +152,11 @@ class NewRequestStates(StatesGroup):
     confirmation = State()
 
 
+class CloseRequestStates(StatesGroup):
+    confirmation = State()
+    comment = State()
+
+
 @router.message(F.text == "📄 Мои заявки")
 async def specialist_requests(message: Message):
     async with async_session() as session:
@@ -212,12 +217,297 @@ async def specialist_request_detail(callback: CallbackQuery):
 
     detail_text = _format_specialist_request_detail(request)
     builder = InlineKeyboardBuilder()
+    
+    # Добавляем кнопки для файлов (писем)
+    letter_acts = [act for act in request.acts if act.type == ActType.LETTER]
+    for act in letter_acts:
+        file_name = act.file_name or f"Файл {act.id}"
+        # Ограничиваем длину имени файла для кнопки
+        button_text = file_name[:40] + "..." if len(file_name) > 40 else file_name
+        builder.button(
+            text=f"📎 {button_text}",
+            callback_data=f"spec:file:{act.id}",
+        )
+    
+    # Добавляем кнопку закрытия заявки, если можно закрыть
+    can_close, reasons = await RequestService.can_close_request(request)
+    if request.status == RequestStatus.CLOSED:
+        builder.button(
+            text="✅ Заявка закрыта",
+            callback_data="spec:noop",
+        )
+    elif can_close:
+        builder.button(
+            text="✅ Закрыть заявку",
+            callback_data=f"spec:close:{request.id}",
+        )
+    else:
+        # Показываем, почему нельзя закрыть (только первую причину для краткости)
+        reason_text = reasons[0][:35] + "..." if reasons and len(reasons[0]) > 35 else (reasons[0] if reasons else "не выполнены условия")
+        builder.button(
+            text=f"⚠️ {reason_text}",
+            callback_data=f"spec:close_info:{request.id}",
+        )
+    
     builder.button(text="⬅️ Назад к списку", callback_data="spec:back")
     builder.button(text="🔄 Обновить", callback_data=f"spec:detail:{request.id}")
     builder.adjust(1)
 
     await callback.message.edit_text(detail_text, reply_markup=builder.as_markup())
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("spec:close_info:"))
+async def specialist_close_info(callback: CallbackQuery):
+    """Показывает информацию о том, почему заявку нельзя закрыть."""
+    _, _, request_id_str = callback.data.split(":")
+    request_id = int(request_id_str)
+    
+    async with async_session() as session:
+        specialist = await _get_specialist(session, callback.from_user.id)
+        if not specialist:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        
+        request = await session.scalar(
+            select(Request)
+            .options(
+                selectinload(Request.engineer),
+                selectinload(Request.master),
+            )
+            .where(Request.id == request_id, Request.specialist_id == specialist.id)
+        )
+        
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+        
+        can_close, reasons = await RequestService.can_close_request(request)
+        if can_close:
+            await callback.answer("Заявку можно закрыть.", show_alert=True)
+            return
+        
+        reasons_text = "\n".join(f"• {reason}" for reason in reasons)
+        await callback.message.answer(
+            f"⚠️ <b>Заявку нельзя закрыть</b>\n\n"
+            f"Причины:\n{reasons_text}\n\n"
+            f"Убедитесь, что все условия выполнены, и попробуйте снова.",
+        )
+        await callback.answer()
+
+
+@router.callback_query(F.data.startswith("spec:close:"))
+async def specialist_start_close(callback: CallbackQuery, state: FSMContext):
+    """Начинает процесс закрытия заявки."""
+    _, _, request_id_str = callback.data.split(":")
+    request_id = int(request_id_str)
+    
+    async with async_session() as session:
+        specialist = await _get_specialist(session, callback.from_user.id)
+        if not specialist:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        
+        request = await session.scalar(
+            select(Request)
+            .options(
+                selectinload(Request.engineer),
+                selectinload(Request.master),
+            )
+            .where(Request.id == request_id, Request.specialist_id == specialist.id)
+        )
+        
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+        
+        # Проверяем, можно ли закрыть
+        can_close, reasons = await RequestService.can_close_request(request)
+        if not can_close:
+            reasons_text = "\n".join(f"• {reason}" for reason in reasons)
+            await callback.message.answer(
+                f"⚠️ <b>Заявку нельзя закрыть</b>\n\n"
+                f"Причины:\n{reasons_text}",
+            )
+            await callback.answer()
+            return
+        
+        if request.status == RequestStatus.CLOSED:
+            await callback.answer("Заявка уже закрыта.", show_alert=True)
+            return
+        
+        # Сохраняем данные в state
+        await state.update_data(
+            request_id=request_id,
+            request_number=request.number,
+        )
+        await state.set_state(CloseRequestStates.comment)
+        
+        await callback.message.answer(
+            f"📋 <b>Закрытие заявки {request.number}</b>\n\n"
+            f"Заявка будет окончательно закрыта.\n\n"
+            f"Введите комментарий к закрытию (или отправьте «-», чтобы пропустить):",
+        )
+        await callback.answer()
+
+
+@router.message(StateFilter(CloseRequestStates.comment))
+async def specialist_close_comment(message: Message, state: FSMContext):
+    """Обрабатывает комментарий при закрытии заявки."""
+    comment = message.text.strip() if message.text and message.text.strip() != "-" else None
+    await state.update_data(comment=comment)
+    await state.set_state(CloseRequestStates.confirmation)
+    
+    data = await state.get_data()
+    request_number = data.get("request_number", "N/A")
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Подтвердить закрытие", callback_data="spec:close_confirm")
+    builder.button(text="❌ Отменить", callback_data="spec:close_cancel")
+    builder.adjust(1)
+    
+    comment_text = f"\n\nКомментарий: {comment}" if comment else "\n\nКомментарий не указан"
+    await message.answer(
+        f"📋 <b>Подтверждение закрытия заявки {request_number}</b>\n\n"
+        f"Вы уверены, что хотите закрыть эту заявку?{comment_text}",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@router.callback_query(F.data == "spec:close_confirm", StateFilter(CloseRequestStates.confirmation))
+async def specialist_close_confirm(callback: CallbackQuery, state: FSMContext):
+    """Подтверждает закрытие заявки."""
+    data = await state.get_data()
+    request_id = data.get("request_id")
+    comment = data.get("comment")
+    
+    if not request_id:
+        await callback.answer("Ошибка: не найден ID заявки.", show_alert=True)
+        await state.clear()
+        return
+    
+    async with async_session() as session:
+        specialist = await _get_specialist(session, callback.from_user.id)
+        if not specialist:
+            await callback.answer("Нет доступа.", show_alert=True)
+            await state.clear()
+            return
+        
+        request = await session.scalar(
+            select(Request)
+            .options(
+                selectinload(Request.engineer),
+                selectinload(Request.master),
+            )
+            .where(Request.id == request_id, Request.specialist_id == specialist.id)
+        )
+        
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            await state.clear()
+            return
+        
+        # Проверяем ещё раз перед закрытием
+        can_close, reasons = await RequestService.can_close_request(request)
+        if not can_close:
+            reasons_text = "\n".join(f"• {reason}" for reason in reasons)
+            await callback.message.answer(
+                f"⚠️ <b>Не удалось закрыть заявку</b>\n\n"
+                f"Причины:\n{reasons_text}",
+            )
+            await callback.answer()
+            await state.clear()
+            return
+        
+        try:
+            await RequestService.close_request(
+                session,
+                request,
+                user_id=specialist.id,
+                comment=comment,
+            )
+            await session.commit()
+            
+            await callback.message.answer(
+                f"✅ <b>Заявка {request.number} успешно закрыта</b>\n\n"
+                f"Все работы завершены, заявка закрыта.",
+            )
+            await callback.answer("Заявка закрыта")
+            
+            # Уведомляем инженера, если он назначен
+            if request.engineer and request.engineer.telegram_id:
+                try:
+                    await callback.message.bot.send_message(
+                        chat_id=int(request.engineer.telegram_id),
+                        text=f"✅ Заявка {request.number} закрыта специалистом.",
+                    )
+                except Exception:
+                    pass
+            
+        except ValueError as e:
+            await callback.message.answer(
+                f"❌ <b>Ошибка при закрытии заявки</b>\n\n{str(e)}",
+            )
+            await callback.answer("Ошибка", show_alert=True)
+        except Exception as e:
+            await callback.message.answer(
+                f"❌ <b>Произошла ошибка</b>\n\n{str(e)}",
+            )
+            await callback.answer("Ошибка", show_alert=True)
+    
+    await state.clear()
+
+
+@router.callback_query(F.data == "spec:close_cancel")
+async def specialist_close_cancel(callback: CallbackQuery, state: FSMContext):
+    """Отменяет закрытие заявки."""
+    await state.clear()
+    await callback.message.answer("Закрытие заявки отменено.")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "spec:noop")
+async def specialist_noop(callback: CallbackQuery):
+    """Пустой обработчик для неактивных кнопок."""
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("spec:file:"))
+async def specialist_open_file(callback: CallbackQuery):
+    """Отправляет прикреплённый файл пользователю."""
+    _, _, act_id_str = callback.data.split(":")
+    act_id = int(act_id_str)
+    
+    async with async_session() as session:
+        specialist = await _get_specialist(session, callback.from_user.id)
+        if not specialist:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        
+        act = await session.scalar(
+            select(Act)
+            .join(Request)
+            .where(
+                Act.id == act_id,
+                Act.type == ActType.LETTER,
+                Request.specialist_id == specialist.id,
+            )
+        )
+        
+        if not act:
+            await callback.answer("Файл не найден.", show_alert=True)
+            return
+        
+        try:
+            # Отправляем файл пользователю
+            await callback.message.bot.send_document(
+                chat_id=callback.from_user.id,
+                document=act.file_id,
+                caption=f"📎 {act.file_name or 'Файл'}",
+            )
+            await callback.answer("Файл отправлен.")
+        except Exception as e:
+            await callback.answer(f"Ошибка при отправке файла: {str(e)}", show_alert=True)
 
 
 @router.callback_query(F.data == "spec:back")
@@ -898,7 +1188,8 @@ def _format_specialist_request_detail(request: Request) -> str:
             lines.append(f"📝 Акты: {act_count}")
         if letter_count:
             letter_text = "приложено" if letter_count == 1 else f"приложено ({letter_count})"
-            lines.append(f"✉️ Письмо: {letter_text}")
+            lines.append(f"✉️ Письма/файлы: {letter_text}")
+            lines.append("   (нажмите на кнопку ниже, чтобы открыть файл)")
     if request.photos:
         lines.append(f"📷 Фотоотчётов: {len(request.photos)}")
     if request.feedback:
