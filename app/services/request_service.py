@@ -23,7 +23,7 @@ from app.infrastructure.db.models import (
     WorkItem,
     WorkSession,
 )
-from app.services.work_catalog import WorkCatalogItem
+from app.services.work_catalog import WorkCatalogItem, WorkMaterialSpec, get_work_catalog
 from app.services.material_catalog import MaterialCatalogItem
 from app.utils.identifiers import generate_request_number
 from app.utils.timezone import now_moscow, to_moscow
@@ -207,6 +207,25 @@ class RequestService:
                 recipients=[engineer_id, request.specialist_id],
                 replace_existing=False,
             )
+        return request
+
+    @staticmethod
+    async def set_remedy_term(
+        session: AsyncSession,
+        request: Request,
+        remedy_term_days: int,
+    ) -> Request:
+        """Меняет срок устранения и пересчитывает дедлайн."""
+        request.remedy_term_days = remedy_term_days
+        if request.inspection_scheduled_at:
+            request.due_at = RequestService._calculate_due_date(
+                request.inspection_scheduled_at,
+                remedy_term_days,
+            )
+        else:
+            base = request.due_at or now_moscow()
+            request.due_at = base + timedelta(days=remedy_term_days)
+        await session.flush()
         return request
 
     @staticmethod
@@ -636,6 +655,7 @@ class RequestService:
         actual_quantity: float,
         author_id: int,
     ) -> WorkItem:
+        """Обновляет факт работы и автоматически материалы по нормам."""
         norm_target = _normalize_work_item_name(catalog_item.name)
         stmt = (
             select(WorkItem)
@@ -682,6 +702,16 @@ class RequestService:
         work_item.actual_quantity = float(actual_quantity)
         work_item.actual_cost = float(round(catalog_item.price * actual_quantity, 2))
 
+        # Автодобавление фактических материалов
+        await RequestService._upsert_materials_from_work(
+            session=session,
+            request=request,
+            work_name=catalog_item.name,
+            category_label=category_label,
+            quantity=actual_quantity,
+            is_plan=False,
+        )
+
         await session.flush()
         await RequestService._recalculate_budget(session, request)
 
@@ -703,6 +733,7 @@ class RequestService:
         planned_quantity: float,
         author_id: int,
     ) -> WorkItem:
+        """Добавляет/обновляет план работы и автоматически материалы по нормам."""
         stmt = select(WorkItem).where(
             WorkItem.request_id == request.id,
             func.lower(WorkItem.name) == catalog_item.name.lower(),
@@ -728,6 +759,16 @@ class RequestService:
             work_item.unit = catalog_item.unit or work_item.unit
             work_item.planned_quantity = float(planned_quantity)
             work_item.planned_cost = planned_cost
+
+        # Автодобавление плановых материалов
+        await RequestService._upsert_materials_from_work(
+            session=session,
+            request=request,
+            work_name=catalog_item.name,
+            category_label=category_label,
+            quantity=planned_quantity,
+            is_plan=True,
+        )
 
         await session.flush()
         await RequestService._recalculate_budget(session, request)
@@ -856,6 +897,61 @@ class RequestService:
             comment=f"Обновлены факты по материалу из каталога «{catalog_item.name}»",
         )
         return work_item
+
+    # --- internal helpers ---
+
+    @staticmethod
+    async def _upsert_materials_from_work(
+        session: AsyncSession,
+        request: Request,
+        *,
+        work_name: str,
+        category_label: str | None,
+        quantity: float,
+        is_plan: bool,
+    ) -> None:
+        """
+        Автоматически добавляет/обновляет материалы по нормам на единицу работы.
+        quantity — план или факт в зависимости от is_plan.
+        """
+        catalog = get_work_catalog()
+        materials: tuple[WorkMaterialSpec, ...] = catalog.get_materials_for_work(work_name)
+        if not materials:
+            return
+
+        for material in materials:
+            total_qty = round(material.qty_per_work_unit * quantity, 4)
+            total_cost = round(material.price_per_unit * total_qty, 2)
+            item_category = (category_label or "Материалы") + " • материалы"
+
+            stmt = select(WorkItem).where(
+                WorkItem.request_id == request.id,
+                func.lower(WorkItem.name) == material.name.lower(),
+            )
+            result = await session.execute(stmt)
+            work_item = result.scalars().first()
+
+            if not work_item:
+                work_item = WorkItem(
+                    request_id=request.id,
+                    name=material.name,
+                    category=item_category,
+                    unit=material.unit,
+                )
+                session.add(work_item)
+
+            if is_plan:
+                work_item.planned_quantity = total_qty
+                work_item.planned_material_cost = total_cost
+                work_item.unit = material.unit or work_item.unit
+                work_item.category = work_item.category or item_category
+            else:
+                work_item.actual_quantity = total_qty
+                work_item.actual_material_cost = total_cost
+                work_item.unit = material.unit or work_item.unit
+                work_item.category = work_item.category or item_category
+
+        await session.flush()
 
     @staticmethod
     async def _register_stage(

@@ -34,7 +34,9 @@ from app.infrastructure.db.session import async_session
 from app.keyboards.master_kb import finish_photo_kb, master_kb
 from app.services.request_service import RequestService
 from app.services.work_catalog import get_work_catalog
+from app.utils.request_formatters import format_request_label
 from app.utils.timezone import format_moscow, now_moscow
+from app.keyboards.calendar import build_calendar, parse_calendar_callback, shift_month
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,7 @@ class MasterStates(StatesGroup):
     finish_dashboard = State()  # Требования к завершению
     finish_photo_upload = State()  # Сбор фото готовой работы
     waiting_finish_location = State()  # Ожидание геопозиции для завершения работы
+    schedule_date = State()  # Плановые выходы мастера
 
 
 FINISH_CONTEXT_KEY = "finish_context"
@@ -84,7 +87,7 @@ async def master_requests(message: Message):
     builder = InlineKeyboardBuilder()
     for req in requests:
         builder.button(
-            text=f"{req.number} · {STATUS_TITLES.get(req.status, req.status.value)}",
+            text=f"{format_request_label(req)} · {STATUS_TITLES.get(req.status, req.status.value)}",
             callback_data=f"master:detail:{req.id}",
         )
     builder.adjust(1)
@@ -133,7 +136,7 @@ async def master_back_to_list(callback: CallbackQuery):
     builder = InlineKeyboardBuilder()
     for req in requests:
         builder.button(
-            text=f"{req.number} · {STATUS_TITLES.get(req.status, req.status.value)}",
+            text=f"{format_request_label(req)} · {STATUS_TITLES.get(req.status, req.status.value)}",
             callback_data=f"master:detail:{req.id}",
         )
     builder.adjust(1)
@@ -260,11 +263,12 @@ async def master_start_work_location(message: Message, state: FSMContext):
             address=request.address,
         )
         await session.commit()
+        request_label = format_request_label(request)
         await _notify_engineer(
             message.bot,
             request,
             text=(
-                f"🔨 Мастер {master.full_name} начал работу по заявке {request.number}.\n"
+                f"🔨 Мастер {master.full_name} начал работу по заявке {request_label}.\n"
                 f"📍 Геопозиция: {_format_location_url(latitude, longitude)}"
             ),
             location=(latitude, longitude),
@@ -560,40 +564,7 @@ async def master_finish_location_fallback(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("master:update_fact:"))
 async def master_update_fact(callback: CallbackQuery):
-    """Предлагает выбрать между работой и материалом для обновления факта."""
-    request_id = int(callback.data.split(":")[2])
-    async with async_session() as session:
-        master = await _get_master(session, callback.from_user.id)
-        if not master:
-            await callback.answer("Нет доступа.", show_alert=True)
-            return
-
-        request = await _load_request(session, master.id, request_id)
-        if not request:
-            await callback.answer("Заявка не найдена.", show_alert=True)
-            return
-
-        header = _catalog_header(request)
-
-    builder = InlineKeyboardBuilder()
-    builder.button(
-        text="🔧 Обновить работу",
-        callback_data=f"master:update_fact_work:{request_id}",
-    )
-    builder.button(
-        text="📦 Обновить материал",
-        callback_data=f"master:update_fact_material:{request_id}",
-    )
-    builder.adjust(1)
-    
-    text = f"{header}\n\nВыберите тип позиции для обновления факта:"
-    await callback.message.answer(text, reply_markup=builder.as_markup())
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("master:update_fact_work:"))
-async def master_update_fact_work(callback: CallbackQuery):
-    """Открывает каталог работ для обновления факта."""
+    """Старт обновления факта: сразу показываем виды работ (материалы автоподсчёт)."""
     request_id = int(callback.data.split(":")[2])
     async with async_session() as session:
         master = await _get_master(session, callback.from_user.id)
@@ -615,37 +586,6 @@ async def master_update_fact_work(callback: CallbackQuery):
         category=None,
         role_key="m",
         request_id=request_id,
-    )
-    await callback.message.answer(text, reply_markup=markup)
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("master:update_fact_material:"))
-async def master_update_fact_material(callback: CallbackQuery):
-    """Открывает каталог материалов для обновления факта."""
-    request_id = int(callback.data.split(":")[2])
-    async with async_session() as session:
-        master = await _get_master(session, callback.from_user.id)
-        if not master:
-            await callback.answer("Нет доступа.", show_alert=True)
-            return
-
-        request = await _load_request(session, master.id, request_id)
-        if not request:
-            await callback.answer("Заявка не найдена.", show_alert=True)
-            return
-
-        header = _catalog_header(request)
-
-    from app.services.material_catalog import get_material_catalog
-    catalog = get_material_catalog()
-    text = f"{header}\n\n{format_category_message(None, is_material=True)}"
-    markup = build_category_keyboard(
-        catalog=catalog,
-        category=None,
-        role_key="mm",  # mm = master material
-        request_id=request_id,
-        is_material=True,
     )
     await callback.message.answer(text, reply_markup=markup)
     await callback.answer()
@@ -1161,12 +1101,12 @@ async def master_photo(message: Message):
             comment,
         )
 
-    label = request.number
+    label = format_request_label(request)
     await message.answer(f"Фото добавлено к заявке {label}.")
     await _notify_engineer(
         message.bot,
         request,
-        text=f"📸 Мастер {master.full_name} добавил фото к заявке {request.number}.",
+        text=f"📸 Мастер {master.full_name} добавил фото к заявке {label}.",
     )
 
 
@@ -1202,11 +1142,12 @@ async def master_location(message: Message, state: FSMContext):
             await session.commit()
             request = await _load_request(session, master.id, work_session.request_id)
             if request:
+                label = format_request_label(request)
                 await _notify_engineer(
                     message.bot,
                     request,
                     text=(
-                        f"📍 Мастер {master.full_name} обновил геопозицию старта по заявке {request.number}: "
+                        f"📍 Мастер {master.full_name} обновил геопозицию старта по заявке {label}: "
                         f"{_format_location_url(message.location.latitude, message.location.longitude)}"
                     ),
                     location=(message.location.latitude, message.location.longitude),
@@ -1230,11 +1171,12 @@ async def master_location(message: Message, state: FSMContext):
             await session.commit()
             request = await _load_request(session, master.id, last_session.request_id)
             if request:
+                label = format_request_label(request)
                 await _notify_engineer(
                     message.bot,
                     request,
                     text=(
-                        f"📍 Мастер {master.full_name} обновил геопозицию завершения по заявке {request.number}: "
+                        f"📍 Мастер {master.full_name} обновил геопозицию завершения по заявке {label}: "
                         f"{_format_location_url(message.location.latitude, message.location.longitude)}"
                     ),
                     location=(message.location.latitude, message.location.longitude),
@@ -1306,7 +1248,7 @@ async def _build_finish_status(
     longitude = finish_context.get("finish_longitude")
     return FinishStatus(
         request_id=request.id,
-        request_number=request.number,
+        request_number=format_request_label(request),
         request_title=request.title,
         photos_confirmed=bool(finish_context.get("photos_confirmed")),
         photos_total=photo_total,
@@ -1466,8 +1408,9 @@ async def _send_finish_report(
         ).scalars().all()
 
     verb = "завершил работы" if finalized else "завершил смену"
+    label = format_request_label(request)
     caption_lines = [
-        f"✅ Мастер {master.full_name} {verb} по заявке {request.number}.",
+        f"✅ Мастер {master.full_name} {verb} по заявке {label}.",
     ]
     if not finalized:
         caption_lines.append("Статус заявки остаётся «В работе».")
@@ -1621,7 +1564,7 @@ async def _get_request_for_master(session, master_id: int, number: str) -> Reque
 
 
 def _catalog_header(request: Request) -> str:
-    return f"Заявка {request.number} · {request.title}"
+    return f"Заявка {format_request_label(request)} · {request.title}"
 
 
 async def _get_master(session, telegram_id: int) -> User | None:
@@ -1744,6 +1687,7 @@ def _detail_keyboard(request_id: int, request: Request | None = None) -> InlineK
     else:
         builder.button(text="▶️ Начать работу", callback_data=f"master:start:{request_id}")
     
+    builder.button(text="🗓 План выхода", callback_data=f"master:schedule:{request_id}")
     builder.button(text="⏹ Завершить работу", callback_data=f"master:finish:{request_id}")
     builder.button(text="✏️ Обновить факт", callback_data=f"master:update_fact:{request_id}")
     builder.button(text="⬅️ Назад к списку", callback_data="master:back")
@@ -1766,6 +1710,104 @@ async def master_location_hint(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("master:schedule:"))
+async def master_schedule(callback: CallbackQuery, state: FSMContext):
+    """Запуск выбора планового выхода мастера по заявке."""
+    request_id = int(callback.data.split(":")[2])
+
+    async with async_session() as session:
+        master = await _get_master(session, callback.from_user.id)
+        if not master:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        request = await _load_request(session, master.id, request_id)
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+
+    await state.set_state(MasterStates.schedule_date)
+    await state.update_data(request_id=request_id)
+    await callback.message.answer(
+        "Выберите дату вашего выхода на объект.\n"
+        "Используйте календарь ниже.",
+        reply_markup=build_calendar(prefix="master_schedule"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(
+    StateFilter(MasterStates.schedule_date),
+    F.data.startswith("cal:master_schedule:"),
+)
+async def master_schedule_calendar(callback: CallbackQuery, state: FSMContext):
+    """Обработка нажатий по календарю мастера."""
+    payload = parse_calendar_callback(callback.data)
+    if not payload:
+        await callback.answer()
+        return
+
+    if payload.action in {"prev", "next"}:
+        new_year, new_month = shift_month(payload.year, payload.month, payload.action)
+        await callback.message.edit_reply_markup(
+            reply_markup=build_calendar("master_schedule", year=new_year, month=new_month),
+        )
+        await callback.answer()
+        return
+
+    if payload.action == "day" and payload.day:
+        data = await state.get_data()
+        request_id = data.get("request_id")
+        if not request_id:
+            await state.clear()
+            await callback.answer("Не удалось определить заявку.", show_alert=True)
+            return
+
+        selected_date = f"{payload.day:02d}.{payload.month:02d}.{payload.year}"
+
+        async with async_session() as session:
+            master = await _get_master(session, callback.from_user.id)
+            if not master:
+                await state.clear()
+                await callback.answer("Нет доступа.", show_alert=True)
+                return
+
+            request = await _load_request(session, master.id, request_id)
+            if not request:
+                await state.clear()
+                await callback.answer("Заявка не найдена.", show_alert=True)
+                return
+
+            label = format_request_label(request)
+
+        # Убираем календарь
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        await state.clear()
+
+        # Сообщение мастеру
+        await callback.message.answer(
+            f"Плановый выход на объект по заявке {label} назначен на {selected_date}."
+        )
+
+        # Уведомляем инженера, если есть
+        if request.engineer and request.engineer.telegram_id:
+            try:
+                await callback.message.bot.send_message(
+                    chat_id=int(request.engineer.telegram_id),
+                    text=(
+                        f"🗓 Мастер {master.full_name} запланировал выход на объект по заявке {label} "
+                        f"на {selected_date}."
+                    ),
+                )
+            except Exception:
+                pass
+
+        await callback.answer()
+
+
 def _format_request_detail(request: Request) -> str:
     status_title = STATUS_TITLES.get(request.status, request.status.value)
     due_text = format_moscow(request.due_at) or "не задан"
@@ -1775,8 +1817,9 @@ def _format_request_detail(request: Request) -> str:
     actual_hours = float(request.actual_hours or 0)
     defects_photos = sum(1 for photo in (request.photos or []) if photo.type == PhotoType.BEFORE)
 
+    label = format_request_label(request)
     lines = [
-        f"🧾 <b>{request.number}</b>",
+        f"🧾 <b>{label}</b>",
         f"Название: {request.title}",
         f"Статус: {status_title}",
         f"Срок устранения: {due_text}",
@@ -1797,9 +1840,27 @@ def _format_request_detail(request: Request) -> str:
         lines.append("")
         lines.append("Позиции бюджета (план / факт):")
         for item in request.work_items:
+            is_material = bool(
+                item.planned_material_cost
+                or item.actual_material_cost
+                or ("материал" in (item.category or "").lower())
+            )
+            emoji = "📦" if is_material else "🛠"
+            planned_cost = item.planned_cost
+            actual_cost = item.actual_cost
+            if planned_cost in (None, 0):
+                planned_cost = item.planned_material_cost
+            if actual_cost in (None, 0):
+                actual_cost = item.actual_material_cost
+            unit = item.unit or ""
+            qty_part = ""
+            if item.planned_quantity is not None or item.actual_quantity is not None:
+                pq = item.planned_quantity if item.planned_quantity is not None else 0
+                aq = item.actual_quantity if item.actual_quantity is not None else 0
+                qty_part = f" | объём: {pq:.2f} → {aq:.2f} {unit}".rstrip()
             lines.append(
-                f"• {item.name} — план {_format_currency(item.planned_cost)} ₽ / "
-                f"факт {_format_currency(item.actual_cost)} ₽"
+                f"{emoji} {item.name} — план {_format_currency(planned_cost)} ₽ / "
+                f"факт {_format_currency(actual_cost)} ₽{qty_part}"
             )
             if item.actual_hours is not None:
                 lines.append(

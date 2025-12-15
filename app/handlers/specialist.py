@@ -21,10 +21,12 @@ from app.infrastructure.db.models import (
     RequestStatus,
     User,
     UserRole,
+    Contract,
 )
 from app.infrastructure.db.session import async_session
 from app.keyboards.calendar import build_calendar, parse_calendar_callback, shift_month
 from app.services.request_service import RequestCreateData, RequestService
+from app.utils.request_formatters import format_request_label
 from app.utils.timezone import combine_moscow, format_moscow, now_moscow
 
 router = Router()
@@ -129,6 +131,19 @@ async def _prompt_inspection_calendar(message: Message):
     )
 
 
+async def _get_saved_contracts(session, limit: int = 10) -> list[Contract]:
+    """Возвращает последние использованные договоры."""
+    return (
+        (
+            await session.execute(
+                select(Contract).order_by(Contract.created_at.desc()).limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
 async def _prompt_inspection_location(message: Message):
     await message.answer("Место осмотра (если отличается от адреса). Если совпадает — отправьте «-».")
 
@@ -147,7 +162,6 @@ class NewRequestStates(StatesGroup):
     inspection_time = State()
     inspection_location = State()
     engineer = State()
-    remedy_term = State()
     letter = State()
     confirmation = State()
 
@@ -155,6 +169,11 @@ class NewRequestStates(StatesGroup):
 class CloseRequestStates(StatesGroup):
     confirmation = State()
     comment = State()
+
+
+class SpecialistFilterStates(StatesGroup):
+    mode = State()
+    value = State()
 
 
 @router.message(F.text == "📄 Мои заявки")
@@ -175,13 +194,101 @@ async def specialist_requests(message: Message):
     for req in requests:
         status = req.status.value
         builder.button(
-            text=f"{req.number} · {status}",
+            text=f"{format_request_label(req)} · {status}",
             callback_data=f"spec:detail:{req.id}",
         )
     builder.adjust(1)
 
     await message.answer(
         "Выберите заявку, чтобы посмотреть подробности и актуальный статус.",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@router.message(F.text == "🔍 Фильтр заявок")
+async def specialist_filter_start(message: Message, state: FSMContext):
+    await state.set_state(SpecialistFilterStates.mode)
+    await message.answer(
+        "Выберите режим фильтрации:\n"
+        "• отправьте «Адрес» — для поиска по адресу\n"
+        "• отправьте «Дата» — для фильтра по диапазону дат создания (формат 01.01.2025-31.01.2025)"
+    )
+
+
+@router.message(StateFilter(SpecialistFilterStates.mode))
+async def specialist_filter_mode(message: Message, state: FSMContext):
+    text = (message.text or "").strip().lower()
+    if text not in {"адрес", "дата"}:
+        await message.answer("Введите «Адрес» или «Дата».")
+        return
+    await state.update_data(mode=text)
+    await state.set_state(SpecialistFilterStates.value)
+    if text == "адрес":
+        await message.answer("Введите часть адреса (улица, дом и т.п.).")
+    else:
+        await message.answer("Введите диапазон дат в формате ДД.ММ.ГГГГ-ДД.ММ.ГГГГ.")
+
+
+@router.message(StateFilter(SpecialistFilterStates.value))
+async def specialist_filter_apply(message: Message, state: FSMContext):
+    from datetime import datetime
+    data = await state.get_data()
+    mode = data.get("mode")
+    value = (message.text or "").strip()
+
+    async with async_session() as session:
+        specialist = await _get_specialist(session, message.from_user.id)
+        if not specialist:
+            await state.clear()
+            await message.answer("Нет доступа.")
+            return
+
+        query = (
+            select(Request)
+            .options(
+                selectinload(Request.engineer),
+                selectinload(Request.master),
+            )
+            .where(Request.specialist_id == specialist.id)
+            .order_by(Request.created_at.desc())
+        )
+
+        if mode == "адрес":
+            query = query.where(func.lower(Request.address).like(f"%{value.lower()}%"))
+        elif mode == "дата":
+            try:
+                start_str, end_str = [p.strip() for p in value.split("-", 1)]
+                start = datetime.strptime(start_str, "%d.%m.%Y")
+                end = datetime.strptime(end_str, "%d.%m.%Y")
+                end = end.replace(hour=23, minute=59, second=59)
+            except Exception:
+                await message.answer("Неверный формат. Используйте ДД.ММ.ГГГГ-ДД.ММ.ГГГГ.")
+                return
+            query = query.where(Request.created_at.between(start, end))
+
+        requests = (
+            (await session.execute(query.limit(30)))
+            .scalars()
+            .all()
+        )
+
+    await state.clear()
+
+    if not requests:
+        await message.answer("Заявок по заданному фильтру не найдено.")
+        return
+
+    builder = InlineKeyboardBuilder()
+    for req in requests:
+        status = req.status.value
+        builder.button(
+            text=f"{format_request_label(req)} · {status}",
+            callback_data=f"spec:detail:{req.id}",
+        )
+    builder.adjust(1)
+
+    await message.answer(
+        "Результаты фильтрации. Выберите заявку:",
         reply_markup=builder.as_markup(),
     )
 
@@ -337,14 +444,15 @@ async def specialist_start_close(callback: CallbackQuery, state: FSMContext):
             return
         
         # Сохраняем данные в state
+        request_label = format_request_label(request)
         await state.update_data(
             request_id=request_id,
-            request_number=request.number,
+            request_label=request_label,
         )
         await state.set_state(CloseRequestStates.comment)
         
         await callback.message.answer(
-            f"📋 <b>Закрытие заявки {request.number}</b>\n\n"
+            f"📋 <b>Закрытие заявки {request_label}</b>\n\n"
             f"Заявка будет окончательно закрыта.\n\n"
             f"Введите комментарий к закрытию (или отправьте «-», чтобы пропустить):",
         )
@@ -359,7 +467,7 @@ async def specialist_close_comment(message: Message, state: FSMContext):
     await state.set_state(CloseRequestStates.confirmation)
     
     data = await state.get_data()
-    request_number = data.get("request_number", "N/A")
+    request_label = data.get("request_label", "N/A")
     
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Подтвердить закрытие", callback_data="spec:close_confirm")
@@ -368,7 +476,7 @@ async def specialist_close_comment(message: Message, state: FSMContext):
     
     comment_text = f"\n\nКомментарий: {comment}" if comment else "\n\nКомментарий не указан"
     await message.answer(
-        f"📋 <b>Подтверждение закрытия заявки {request_number}</b>\n\n"
+        f"📋 <b>Подтверждение закрытия заявки {request_label}</b>\n\n"
         f"Вы уверены, что хотите закрыть эту заявку?{comment_text}",
         reply_markup=builder.as_markup(),
     )
@@ -428,8 +536,9 @@ async def specialist_close_confirm(callback: CallbackQuery, state: FSMContext):
             )
             await session.commit()
             
+            label = format_request_label(request)
             await callback.message.answer(
-                f"✅ <b>Заявка {request.number} успешно закрыта</b>\n\n"
+                f"✅ <b>Заявка {label} успешно закрыта</b>\n\n"
                 f"Все работы завершены, заявка закрыта.",
             )
             await callback.answer("Заявка закрыта")
@@ -439,7 +548,7 @@ async def specialist_close_confirm(callback: CallbackQuery, state: FSMContext):
                 try:
                     await callback.message.bot.send_message(
                         chat_id=int(request.engineer.telegram_id),
-                        text=f"✅ Заявка {request.number} закрыта специалистом.",
+                        text=f"✅ Заявка {label} закрыта специалистом.",
                     )
                 except Exception:
                     pass
@@ -526,7 +635,10 @@ async def specialist_back_to_list(callback: CallbackQuery):
 
     builder = InlineKeyboardBuilder()
     for req in requests:
-        builder.button(text=f"{req.number} · {req.status.value}", callback_data=f"spec:detail:{req.id}")
+        builder.button(
+            text=f"{format_request_label(req)} · {req.status.value}",
+            callback_data=f"spec:detail:{req.id}",
+        )
     builder.adjust(1)
     await callback.message.edit_text(
         "Выберите заявку, чтобы посмотреть подробности и актуальный статус.",
@@ -754,19 +866,82 @@ async def handle_contact_phone(message: Message, state: FSMContext):
         await message.answer("Похоже, номер слишком короткий. Введите номер полностью.")
         return
     await state.update_data(contact_phone=phone)
-    await state.set_state(NewRequestStates.contract_number)
-    await message.answer("Номер договора (если нет — отправьте «-»).")
+
+    # Показываем сохранённые договоры
+    async with async_session() as session:
+        contracts = await _get_saved_contracts(session, limit=10)
+
+    if contracts:
+        builder = InlineKeyboardBuilder()
+        for contract in contracts:
+            title = contract.number
+            if contract.description:
+                title = f"{contract.number} — {contract.description[:30]}"
+            builder.button(
+                text=title[:50],
+                callback_data=f"spec:contract:{contract.id}",
+            )
+        builder.button(text="✍️ Ввести вручную", callback_data="spec:contract:manual")
+        builder.adjust(1)
+        await state.set_state(NewRequestStates.contract_number)
+        await message.answer(
+            "Выберите номер договора из списка или введите вручную.\n"
+            "Если договора нет — отправьте «-».",
+            reply_markup=builder.as_markup(),
+        )
+    else:
+        await state.set_state(NewRequestStates.contract_number)
+        await message.answer("Номер договора (если нет — отправьте «-»).")
 
 
-@router.message(StateFilter(NewRequestStates.contract_number))
-async def handle_contract(message: Message, state: FSMContext):
-    contract = message.text.strip()
-    await state.update_data(contract_number=None if contract == "-" else contract)
-    await state.set_state(NewRequestStates.defect_type)
+@router.callback_query(StateFilter(NewRequestStates.contract_number), F.data.startswith("spec:contract:"))
+async def handle_contract_choice(callback: CallbackQuery, state: FSMContext):
+    _, _, contract_id_str = callback.data.split(":")
+    if contract_id_str == "manual":
+        await callback.message.edit_reply_markup()
+        await callback.message.answer("Введите номер договора (если нет — отправьте «-»).")
+        await callback.answer()
+        return
+
+    try:
+        contract_id = int(contract_id_str)
+    except ValueError:
+        await callback.answer("Некорректный договор. Введите номер вручную.", show_alert=True)
+        return
+
+    async with async_session() as session:
+        contract = await session.get(Contract, contract_id)
+
+    if not contract:
+        await callback.answer("Договор не найден. Введите номер вручную.", show_alert=True)
+        return
+
+    await state.update_data(contract_number=contract.number)
+    await callback.message.edit_text(f"Договор: {contract.number}")
 
     async with async_session() as session:
         defect_types = await _get_defect_types(session)
 
+    await state.set_state(NewRequestStates.defect_type)
+    if defect_types:
+        await callback.message.answer(
+            "Выберите тип дефекта из списка или введите свой текстом.",
+            reply_markup=_defect_type_keyboard(defect_types),
+        )
+    else:
+        await callback.message.answer("Тип дефекта (например, «Трещины в стене»).")
+    await callback.answer()
+
+
+@router.message(StateFilter(NewRequestStates.contract_number))
+async def handle_contract(message: Message, state: FSMContext):
+    contract = (message.text or "").strip()
+    await state.update_data(contract_number=None if contract == "-" else contract or None)
+
+    async with async_session() as session:
+        defect_types = await _get_defect_types(session)
+
+    await state.set_state(NewRequestStates.defect_type)
     if defect_types:
         await message.answer(
             "Выберите тип дефекта из списка или введите свой текстом.",
@@ -930,26 +1105,14 @@ async def handle_inspection_location(message: Message, state: FSMContext):
 @router.callback_query(StateFilter(NewRequestStates.engineer), F.data.startswith("assign_engineer:"))
 async def handle_engineer_callback(callback: CallbackQuery, state: FSMContext):
     engineer_id = int(callback.data.split(":")[1])
-    await state.update_data(engineer_id=engineer_id)
-    await state.set_state(NewRequestStates.remedy_term)
-    await callback.message.edit_reply_markup()
-    await callback.message.answer("Выберите срок устранения замечаний: 14 или 30 дней.")
-    await callback.answer()
-
-
-@router.message(StateFilter(NewRequestStates.remedy_term))
-async def handle_remedy_term(message: Message, state: FSMContext):
-    text = message.text.strip()
-    if text not in {"14", "30"}:
-        await message.answer("Допустимые значения: 14 или 30.")
-        return
-    await state.update_data(remedy_term_days=int(text))
-
+    await state.update_data(engineer_id=engineer_id, remedy_term_days=14)
     await state.set_state(NewRequestStates.letter)
-    await message.answer(
+    await callback.message.edit_reply_markup()
+    await callback.message.answer(
         "Прикрепите файл обращения (письмо) в формате PDF/документа или отправьте «-», если письма нет.\n"
-        "Для отмены напишите «Отмена»."
+        "Для отмены напишите «Отмена».",
     )
+    await callback.answer()
 
 
 @router.message(StateFilter(NewRequestStates.letter), F.document)
@@ -1021,12 +1184,12 @@ async def confirm_request(message: Message, state: FSMContext):
 
         await session.commit()
 
-        request_number = request.number
+        request_label = format_request_label(request)
         request_title = request.title
         due_at = request.due_at
 
     await message.answer(
-        f"✅ Заявка {request_number} создана и назначена инженеру.\n"
+        f"✅ Заявка {request_label} создана и назначена инженеру.\n"
         "Следите за статусом в разделе «📄 Мои заявки»."
     )
     await state.clear()
@@ -1035,7 +1198,7 @@ async def confirm_request(message: Message, state: FSMContext):
     if engineer_telegram:
         due_text = format_moscow(due_at) or "не задан"
         notification = (
-            f"Новая заявка {request_number}.\n"
+            f"Новая заявка {request_label}.\n"
             f"Название: {request_title}\n"
             f"Объект: {data['object_name']}\n"
             f"Адрес: {data['address']}\n"
@@ -1133,6 +1296,7 @@ def _format_specialist_request_detail(request: Request) -> str:
     due_text = format_moscow(request.due_at) or "не задан"
     inspection_text = format_moscow(request.inspection_scheduled_at) or "не назначен"
     inspection_done = format_moscow(request.inspection_completed_at) or "нет"
+    label = format_request_label(request)
 
     planned_budget = float(request.planned_budget or 0)
     actual_budget = float(request.actual_budget or 0)
@@ -1143,7 +1307,7 @@ def _format_specialist_request_detail(request: Request) -> str:
     hours_delta = actual_hours - planned_hours
 
     lines = [
-        f"📄 <b>{request.number}</b>",
+        f"📄 <b>{label}</b>",
         f"Название: {request.title}",
         f"Статус: {status_title}",
         f"Инженер: {engineer}",
@@ -1173,9 +1337,27 @@ def _format_specialist_request_detail(request: Request) -> str:
         lines.append("")
         lines.append("📦 <b>Позиции бюджета</b>")
         for item in request.work_items:
+            is_material = bool(
+                item.planned_material_cost
+                or item.actual_material_cost
+                or ("материал" in (item.category or "").lower())
+            )
+            emoji = "📦" if is_material else "🛠"
+            planned_cost = item.planned_cost
+            actual_cost = item.actual_cost
+            if planned_cost in (None, 0):
+                planned_cost = item.planned_material_cost
+            if actual_cost in (None, 0):
+                actual_cost = item.actual_material_cost
+            unit = item.unit or ""
+            qty_part = ""
+            if item.planned_quantity is not None or item.actual_quantity is not None:
+                pq = item.planned_quantity if item.planned_quantity is not None else 0
+                aq = item.actual_quantity if item.actual_quantity is not None else 0
+                qty_part = f" | объём: {pq:.2f} → {aq:.2f} {unit}".rstrip()
             lines.append(
-                f"• {item.name} — план {_format_currency(item.planned_cost)} ₽ / "
-                f"факт {_format_currency(item.actual_cost)} ₽"
+                f"{emoji} {item.name} — план {_format_currency(planned_cost)} ₽ / "
+                f"факт {_format_currency(actual_cost)} ₽{qty_part}"
             )
             if item.notes:
                 lines.append(f"  → {item.notes}")

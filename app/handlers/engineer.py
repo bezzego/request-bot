@@ -36,6 +36,7 @@ from app.infrastructure.db.session import async_session
 from app.keyboards.calendar import build_calendar, parse_calendar_callback, shift_month
 from app.services.request_service import RequestCreateData, RequestService
 from app.services.work_catalog import get_work_catalog
+from app.utils.request_formatters import format_request_label
 from app.utils.timezone import combine_moscow, format_moscow, now_moscow
 
 router = Router()
@@ -61,6 +62,11 @@ class EngineerCreateStates(StatesGroup):
     description = State()
     phone = State()
     confirmation = State()
+
+
+class EngineerFilterStates(StatesGroup):
+    mode = State()
+    value = State()
 
 
 STATUS_TITLES = {
@@ -224,8 +230,9 @@ async def engineer_create_confirm(message: Message, state: FSMContext):
         request = await RequestService.create_request(session, create_data)
         await session.commit()
 
+    label = format_request_label(request)
     await message.answer(
-        f"✅ Заявка {request.number} создана. Вы назначены ответственным инженером.\n"
+        f"✅ Заявка {label} создана. Вы назначены ответственным инженером.\n"
         "Следите за статусом в разделе «📋 Мои заявки».",
     )
     await state.clear()
@@ -300,13 +307,99 @@ async def engineer_requests(message: Message):
     builder = InlineKeyboardBuilder()
     for req in requests:
         builder.button(
-            text=f"{req.number} · {STATUS_TITLES.get(req.status, req.status.value)}",
+            text=f"{format_request_label(req)} · {STATUS_TITLES.get(req.status, req.status.value)}",
             callback_data=f"eng:detail:{req.id}",
         )
     builder.adjust(1)
 
     await message.answer(
         "Выберите заявку, чтобы управлять этапами и бюджетом.",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@router.message(F.text == "🔍 Фильтр заявок")
+async def engineer_filter_start(message: Message, state: FSMContext):
+    await state.set_state(EngineerFilterStates.mode)
+    await message.answer(
+        "Выберите режим фильтрации:\n"
+        "• отправьте «Адрес» — для поиска по адресу\n"
+        "• отправьте «Дата» — для фильтра по диапазону дат создания (формат 01.01.2025-31.01.2025)"
+    )
+
+
+@router.message(StateFilter(EngineerFilterStates.mode))
+async def engineer_filter_mode(message: Message, state: FSMContext):
+    text = (message.text or "").strip().lower()
+    if text not in {"адрес", "дата"}:
+        await message.answer("Введите «Адрес» или «Дата».")
+        return
+    await state.update_data(mode=text)
+    await state.set_state(EngineerFilterStates.value)
+    if text == "адрес":
+        await message.answer("Введите часть адреса (улица, дом и т.п.).")
+    else:
+        await message.answer("Введите диапазон дат в формате ДД.ММ.ГГГГ-ДД.ММ.ГГГГ.")
+
+
+@router.message(StateFilter(EngineerFilterStates.value))
+async def engineer_filter_apply(message: Message, state: FSMContext):
+    from datetime import datetime
+    data = await state.get_data()
+    mode = data.get("mode")
+    value = (message.text or "").strip()
+
+    async with async_session() as session:
+        engineer = await _get_engineer(session, message.from_user.id)
+        if not engineer:
+            await state.clear()
+            await message.answer("Нет доступа.")
+            return
+
+        query = (
+            select(Request)
+            .options(
+                selectinload(Request.master),
+            )
+            .where(Request.engineer_id == engineer.id)
+            .order_by(Request.created_at.desc())
+        )
+
+        if mode == "адрес":
+            query = query.where(func.lower(Request.address).like(f"%{value.lower()}%"))
+        elif mode == "дата":
+            try:
+                start_str, end_str = [p.strip() for p in value.split("-", 1)]
+                start = datetime.strptime(start_str, "%d.%m.%Y")
+                end = datetime.strptime(end_str, "%d.%m.%Y")
+                end = end.replace(hour=23, minute=59, second=59)
+            except Exception:
+                await message.answer("Неверный формат. Используйте ДД.ММ.ГГГГ-ДД.ММ.ГГГГ.")
+                return
+            query = query.where(Request.created_at.between(start, end))
+
+        requests = (
+            (await session.execute(query.limit(30)))
+            .scalars()
+            .all()
+        )
+
+    await state.clear()
+
+    if not requests:
+        await message.answer("Заявок по заданному фильтру не найдено.")
+        return
+
+    builder = InlineKeyboardBuilder()
+    for req in requests:
+        builder.button(
+            text=f"{format_request_label(req)} · {STATUS_TITLES.get(req.status, req.status.value)}",
+            callback_data=f"eng:detail:{req.id}",
+        )
+    builder.adjust(1)
+
+    await message.answer(
+        "Результаты фильтрации. Выберите заявку:",
         reply_markup=builder.as_markup(),
     )
 
@@ -357,7 +450,7 @@ async def engineer_back_to_list(callback: CallbackQuery):
     builder = InlineKeyboardBuilder()
     for req in requests:
         builder.button(
-            text=f"{req.number} · {STATUS_TITLES.get(req.status, req.status.value)}",
+            text=f"{format_request_label(req)} · {STATUS_TITLES.get(req.status, req.status.value)}",
             callback_data=f"eng:detail:{req.id}",
         )
     builder.adjust(1)
@@ -536,13 +629,13 @@ async def _complete_engineer_schedule(
             inspection_location=location or request.inspection_location,
         )
         await session.commit()
-        request_number = request.number
+        request_label = format_request_label(request)
 
     if inspection_dt:
         inspection_text = format_moscow(inspection_dt) or "—"
-        main_line = f"Осмотр по заявке {request_number} назначен на {inspection_text}."
+        main_line = f"Осмотр по заявке {request_label} назначен на {inspection_text}."
     else:
-        main_line = f"Информация об осмотре заявки {request_number} обновлена."
+        main_line = f"Информация об осмотре заявки {request_label} обновлена."
     if location:
         main_line += f"\nМесто осмотра: {location}"
 
@@ -761,7 +854,7 @@ async def engineer_inspection_final_confirm(callback: CallbackQuery, state: FSMC
         pass
 
     await callback.answer("Осмотр завершён.")
-    await callback.message.answer(f"✅ Осмотр по заявке {request.number} отмечен как выполненный.")
+    await callback.message.answer(f"✅ Осмотр по заявке {format_request_label(request)} отмечен как выполненный.")
     await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
 
 
@@ -779,40 +872,7 @@ async def engineer_inspection_cancel(callback: CallbackQuery, state: FSMContext)
 
 @router.callback_query(F.data.startswith("eng:add_plan:"))
 async def engineer_add_plan(callback: CallbackQuery):
-    """Предлагает выбрать между работой и материалом."""
-    request_id = int(callback.data.split(":")[2])
-    async with async_session() as session:
-        engineer = await _get_engineer(session, callback.from_user.id)
-        if not engineer:
-            await callback.answer("Нет доступа.", show_alert=True)
-            return
-
-        request = await _load_request(session, engineer.id, request_id)
-        if not request:
-            await callback.answer("Заявка не найдена.", show_alert=True)
-            return
-
-        header = _catalog_header(request)
-
-    builder = InlineKeyboardBuilder()
-    builder.button(
-        text="🔧 Добавить работу",
-        callback_data=f"eng:add_plan_work:{request_id}",
-    )
-    builder.button(
-        text="📦 Добавить материал",
-        callback_data=f"eng:add_plan_material:{request_id}",
-    )
-    builder.adjust(1)
-    
-    text = f"{header}\n\nВыберите тип позиции для добавления в план:"
-    await callback.message.answer(text, reply_markup=builder.as_markup())
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("eng:add_plan_work:"))
-async def engineer_add_plan_work(callback: CallbackQuery):
-    """Открывает каталог работ для добавления в план."""
+    """Старт добавления плана: сразу показываем виды работ (материалы автоподсчёт)."""
     request_id = int(callback.data.split(":")[2])
     async with async_session() as session:
         engineer = await _get_engineer(session, callback.from_user.id)
@@ -834,37 +894,6 @@ async def engineer_add_plan_work(callback: CallbackQuery):
         category=None,
         role_key="ep",
         request_id=request_id,
-    )
-    await callback.message.answer(text, reply_markup=markup)
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("eng:add_plan_material:"))
-async def engineer_add_plan_material(callback: CallbackQuery):
-    """Открывает каталог материалов для добавления в план."""
-    request_id = int(callback.data.split(":")[2])
-    async with async_session() as session:
-        engineer = await _get_engineer(session, callback.from_user.id)
-        if not engineer:
-            await callback.answer("Нет доступа.", show_alert=True)
-            return
-
-        request = await _load_request(session, engineer.id, request_id)
-        if not request:
-            await callback.answer("Заявка не найдена.", show_alert=True)
-            return
-
-        header = _catalog_header(request)
-
-    from app.services.material_catalog import get_material_catalog
-    catalog = get_material_catalog()
-    text = f"{header}\n\n{format_category_message(None, is_material=True)}"
-    markup = build_category_keyboard(
-        catalog=catalog,
-        category=None,
-        role_key="epm",  # epm = engineer plan material
-        request_id=request_id,
-        is_material=True,
     )
     await callback.message.answer(text, reply_markup=markup)
     await callback.answer()
@@ -1025,40 +1054,7 @@ async def engineer_work_catalog_plan(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("eng:update_fact:"))
 async def engineer_update_fact(callback: CallbackQuery):
-    """Предлагает выбрать между работой и материалом для обновления факта."""
-    request_id = int(callback.data.split(":")[2])
-    async with async_session() as session:
-        engineer = await _get_engineer(session, callback.from_user.id)
-        if not engineer:
-            await callback.answer("Нет доступа.", show_alert=True)
-            return
-
-        request = await _load_request(session, engineer.id, request_id)
-        if not request:
-            await callback.answer("Заявка не найдена.", show_alert=True)
-            return
-
-        header = _catalog_header(request)
-
-    builder = InlineKeyboardBuilder()
-    builder.button(
-        text="🔧 Обновить работу",
-        callback_data=f"eng:update_fact_work:{request_id}",
-    )
-    builder.button(
-        text="📦 Обновить материал",
-        callback_data=f"eng:update_fact_material:{request_id}",
-    )
-    builder.adjust(1)
-    
-    text = f"{header}\n\nВыберите тип позиции для обновления факта:"
-    await callback.message.answer(text, reply_markup=builder.as_markup())
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("eng:update_fact_work:"))
-async def engineer_update_fact_work(callback: CallbackQuery):
-    """Открывает каталог работ для обновления факта."""
+    """Старт обновления факта: сразу показываем виды работ (материалы автоподсчёт)."""
     request_id = int(callback.data.split(":")[2])
     async with async_session() as session:
         engineer = await _get_engineer(session, callback.from_user.id)
@@ -1080,37 +1076,6 @@ async def engineer_update_fact_work(callback: CallbackQuery):
         category=None,
         role_key="e",
         request_id=request_id,
-    )
-    await callback.message.answer(text, reply_markup=markup)
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("eng:update_fact_material:"))
-async def engineer_update_fact_material(callback: CallbackQuery):
-    """Открывает каталог материалов для обновления факта."""
-    request_id = int(callback.data.split(":")[2])
-    async with async_session() as session:
-        engineer = await _get_engineer(session, callback.from_user.id)
-        if not engineer:
-            await callback.answer("Нет доступа.", show_alert=True)
-            return
-
-        request = await _load_request(session, engineer.id, request_id)
-        if not request:
-            await callback.answer("Заявка не найдена.", show_alert=True)
-            return
-
-        header = _catalog_header(request)
-
-    from app.services.material_catalog import get_material_catalog
-    catalog = get_material_catalog()
-    text = f"{header}\n\n{format_category_message(None, is_material=True)}"
-    markup = build_category_keyboard(
-        catalog=catalog,
-        category=None,
-        role_key="em",  # em = engineer material
-        request_id=request_id,
-        is_material=True,
     )
     await callback.message.answer(text, reply_markup=markup)
     await callback.answer()
@@ -1657,7 +1622,7 @@ async def engineer_pick_master(callback: CallbackQuery):
         await callback.bot.send_message(
             chat_id=master.telegram_id,
             text=(
-                f"Вам назначена заявка {request.number}.\n"
+                f"Вам назначена заявка {format_request_label(request)}.\n"
                 f"Объект: {request.object.name if request.object else request.address}."
             ),
         )
@@ -1931,11 +1896,69 @@ def _detail_keyboard(request_id: int):
     builder.button(text="✅ Осмотр выполнен", callback_data=f"eng:inspect:{request_id}")
     builder.button(text="➕ Плановая позиция", callback_data=f"eng:add_plan:{request_id}")
     builder.button(text="✏️ Обновить факт", callback_data=f"eng:update_fact:{request_id}")
+    builder.button(text="⏱ Срок устранения", callback_data=f"eng:set_term:{request_id}")
     builder.button(text="👷 Назначить мастера", callback_data=f"eng:assign_master:{request_id}")
     builder.button(text="📄 Готово к подписанию", callback_data=f"eng:ready:{request_id}")
     builder.button(text="⬅️ Назад к списку", callback_data="eng:back")
     builder.adjust(1)
     return builder.as_markup()
+
+
+@router.callback_query(F.data.startswith("eng:set_term:"))
+async def engineer_set_remedy_term(callback: CallbackQuery):
+    request_id = int(callback.data.split(":")[2])
+    async with async_session() as session:
+        engineer = await _get_engineer(session, callback.from_user.id)
+        if not engineer:
+            await callback.answer("Нет доступа к заявке.", show_alert=True)
+            return
+        request = await _load_request(session, engineer.id, request_id)
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+        current = request.remedy_term_days
+
+    builder = InlineKeyboardBuilder()
+    for days in (14, 30):
+        builder.button(text=f"{days} дней", callback_data=f"eng:set_term_value:{request_id}:{days}")
+    builder.button(text="⬅️ Назад", callback_data=f"eng:detail:{request_id}")
+    builder.adjust(1)
+
+    await callback.message.answer(
+        f"Выберите срок устранения (сейчас {current} дней):",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("eng:set_term_value:"))
+async def engineer_set_remedy_term_value(callback: CallbackQuery):
+    _, _, request_id_str, days_str = callback.data.split(":")
+    try:
+        request_id = int(request_id_str)
+        days = int(days_str)
+    except ValueError:
+        await callback.answer("Некорректный срок.", show_alert=True)
+        return
+
+    async with async_session() as session:
+        engineer = await _get_engineer(session, callback.from_user.id)
+        if not engineer:
+            await callback.answer("Нет доступа к заявке.", show_alert=True)
+            return
+
+        request = await _load_request(session, engineer.id, request_id)
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+
+        await RequestService.set_remedy_term(session, request, days)
+        await session.commit()
+        label = format_request_label(request)
+
+    await callback.answer("Срок сохранён.")
+    await callback.message.answer(f"Срок устранения для заявки {label} установлен: {days} дней.")
+    await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
 
 
 def _format_request_detail(request: Request) -> str:
@@ -1945,6 +1968,7 @@ def _format_request_detail(request: Request) -> str:
     due_text = format_moscow(request.due_at) or "не задан"
     inspection = format_moscow(request.inspection_scheduled_at) or "не назначен"
     work_end = format_moscow(request.work_completed_at) or "—"
+    label = format_request_label(request)
 
     planned_budget = float(request.planned_budget or 0)
     actual_budget = float(request.actual_budget or 0)
@@ -1952,7 +1976,7 @@ def _format_request_detail(request: Request) -> str:
     actual_hours = float(request.actual_hours or 0)
 
     lines = [
-        f"📄 <b>{request.number}</b>",
+        f"📄 <b>{label}</b>",
         f"Название: {request.title}",
         f"Статус: {status_title}",
         f"Объект: {object_name}",
@@ -1976,9 +2000,27 @@ def _format_request_detail(request: Request) -> str:
         lines.append("")
         lines.append("📦 <b>Позиции бюджета</b>")
         for item in request.work_items:
+            is_material = bool(
+                item.planned_material_cost
+                or item.actual_material_cost
+                or ("материал" in (item.category or "").lower())
+            )
+            emoji = "📦" if is_material else "🛠"
+            planned_cost = item.planned_cost
+            actual_cost = item.actual_cost
+            if planned_cost in (None, 0):
+                planned_cost = item.planned_material_cost
+            if actual_cost in (None, 0):
+                actual_cost = item.actual_material_cost
+            unit = item.unit or ""
+            qty_part = ""
+            if item.planned_quantity is not None or item.actual_quantity is not None:
+                pq = item.planned_quantity if item.planned_quantity is not None else 0
+                aq = item.actual_quantity if item.actual_quantity is not None else 0
+                qty_part = f" | объём: {pq:.2f} → {aq:.2f} {unit}".rstrip()
             lines.append(
-                f"• {item.name} — план {_format_currency(item.planned_cost)} ₽ / "
-                f"факт {_format_currency(item.actual_cost)} ₽"
+                f"{emoji} {item.name} — план {_format_currency(planned_cost)} ₽ / "
+                f"факт {_format_currency(actual_cost)} ₽{qty_part}"
             )
             if item.actual_hours is not None:
                 lines.append(
@@ -2058,7 +2100,7 @@ def _build_engineer_analytics(requests: Sequence[Request]) -> str:
         lines.append("⚠️ Срок устранения в ближайшие 72 часа:")
         for req in upcoming:
             due_text = format_moscow(req.due_at) or "не задан"
-            lines.append(f"• {req.number} — до {due_text}")
+            lines.append(f"• {format_request_label(req)} — до {due_text}")
 
     return "\n".join(lines)
 
@@ -2086,4 +2128,4 @@ async def _get_work_item(session, request_id: int, name: str) -> WorkItem | None
 
 
 def _catalog_header(request: Request) -> str:
-    return f"Заявка {request.number} · {request.title}"
+    return f"Заявка {format_request_label(request)} · {request.title}"

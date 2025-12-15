@@ -4,6 +4,7 @@ engineer_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="➕ Новая заявка")],
         [KeyboardButton(text="📋 Мои заявки"), KeyboardButton(text="📊 Аналитика")],
+        [KeyboardButton(text="🔍 Фильтр заявок")],
     ],
     resize_keyboard=True,
 )

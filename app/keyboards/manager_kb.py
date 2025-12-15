@@ -4,6 +4,7 @@ manager_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="➕ Создать заявку")],
         [KeyboardButton(text="📄 Мои заявки"), KeyboardButton(text="📋 Все заявки")],
+        [KeyboardButton(text="🔍 Фильтр заявок")],
         [KeyboardButton(text="📊 Отчёты и статистика"), KeyboardButton(text="📤 Экспорт Excel")],
         [KeyboardButton(text="👥 Управление пользователями")],
     ],

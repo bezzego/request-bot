@@ -25,6 +25,7 @@ from app.services.export import ExportService
 from app.services.reporting import ReportingService
 from app.services.request_service import RequestService
 from app.services.user_service import UserRoleService
+from app.utils.request_formatters import format_request_label
 from app.utils.timezone import now_moscow
 
 router = Router()
@@ -33,6 +34,11 @@ router = Router()
 class ManagerCloseStates(StatesGroup):
     comment = State()
     confirmation = State()
+
+
+class ManagerFilterStates(StatesGroup):
+    mode = State()
+    value = State()
 
 
 @router.message(F.text == "👥 Управление пользователями")
@@ -210,7 +216,7 @@ async def manager_my_requests(message: Message):
     for req in requests:
         status = req.status.value
         builder.button(
-            text=f"{req.number} · {status}",
+            text=f"{format_request_label(req)} · {status}",
             callback_data=f"spec:detail:{req.id}",
         )
     builder.adjust(1)
@@ -254,7 +260,7 @@ async def manager_all_requests(message: Message):
     for req in requests:
         status_emoji = "✅" if req.status.value == "closed" else "🔄" if req.status.value in ["completed", "ready_for_sign"] else "📋"
         builder.button(
-            text=f"{status_emoji} {req.number} · {req.status.value}",
+            text=f"{status_emoji} {format_request_label(req)} · {req.status.value}",
             callback_data=f"manager:detail:{req.id}",
         )
     builder.adjust(1)
@@ -262,6 +268,94 @@ async def manager_all_requests(message: Message):
     await message.answer(
         "📋 <b>Последние 30 заявок</b>\n\n"
         "Выберите заявку, чтобы посмотреть подробности и закрыть её.",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@router.message(F.text == "🔍 Фильтр заявок")
+async def manager_filter_start(message: Message, state: FSMContext):
+    await state.set_state(ManagerFilterStates.mode)
+    await message.answer(
+        "Выберите режим фильтрации:\n"
+        "• отправьте «Адрес» — для поиска по адресу\n"
+        "• отправьте «Дата» — для фильтра по диапазону дат создания (формат 01.01.2025-31.01.2025)"
+    )
+
+
+@router.message(StateFilter(ManagerFilterStates.mode))
+async def manager_filter_mode(message: Message, state: FSMContext):
+    text = (message.text or "").strip().lower()
+    if text not in {"адрес", "дата"}:
+        await message.answer("Введите «Адрес» или «Дата».")
+        return
+    await state.update_data(mode=text)
+    await state.set_state(ManagerFilterStates.value)
+    if text == "адрес":
+        await message.answer("Введите часть адреса (улица, дом и т.п.).")
+    else:
+        await message.answer("Введите диапазон дат в формате ДД.ММ.ГГГГ-ДД.ММ.ГГГГ.")
+
+
+@router.message(StateFilter(ManagerFilterStates.value))
+async def manager_filter_apply(message: Message, state: FSMContext):
+    from datetime import datetime
+    data = await state.get_data()
+    mode = data.get("mode")
+    value = (message.text or "").strip()
+
+    async with async_session() as session:
+        manager = await _get_super_admin(session, message.from_user.id)
+        if not manager:
+            await state.clear()
+            await message.answer("Доступ ограничен.")
+            return
+
+        query = (
+            select(Request)
+            .options(
+                selectinload(Request.specialist),
+                selectinload(Request.engineer),
+                selectinload(Request.master),
+            )
+            .order_by(Request.created_at.desc())
+        )
+
+        if mode == "адрес":
+            query = query.where(func.lower(Request.address).like(f"%{value.lower()}%"))
+        elif mode == "дата":
+            try:
+                start_str, end_str = [p.strip() for p in value.split("-", 1)]
+                start = datetime.strptime(start_str, "%d.%m.%Y")
+                end = datetime.strptime(end_str, "%d.%m.%Y")
+                end = end.replace(hour=23, minute=59, second=59)
+            except Exception:
+                await message.answer("Неверный формат. Используйте ДД.ММ.ГГГГ-ДД.ММ.ГГГГ.")
+                return
+            query = query.where(Request.created_at.between(start, end))
+
+        requests = (
+            (await session.execute(query.limit(50)))
+            .scalars()
+            .all()
+        )
+
+    await state.clear()
+
+    if not requests:
+        await message.answer("Заявок по заданному фильтру не найдено.")
+        return
+
+    builder = InlineKeyboardBuilder()
+    for req in requests:
+        status_emoji = "✅" if req.status.value == "closed" else "🔄" if req.status.value in ["completed", "ready_for_sign"] else "📋"
+        builder.button(
+            text=f"{status_emoji} {format_request_label(req)} · {req.status.value}",
+            callback_data=f"manager:detail:{req.id}",
+        )
+    builder.adjust(1)
+
+    await message.answer(
+        "Результаты фильтрации. Выберите заявку:",
         reply_markup=builder.as_markup(),
     )
 
@@ -494,14 +588,15 @@ async def manager_start_close(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Заявка уже закрыта.", show_alert=True)
             return
         
+        request_label = format_request_label(request)
         await state.update_data(
             request_id=request_id,
-            request_number=request.number,
+            request_label=request_label,
         )
         await state.set_state(ManagerCloseStates.comment)
         
         await callback.message.answer(
-            f"📋 <b>Закрытие заявки {request.number}</b>\n\n"
+            f"📋 <b>Закрытие заявки {request_label}</b>\n\n"
             f"Заявка будет окончательно закрыта.\n\n"
             f"Введите комментарий к закрытию (или отправьте «-», чтобы пропустить):",
         )
@@ -516,7 +611,7 @@ async def manager_close_comment(message: Message, state: FSMContext):
     await state.set_state(ManagerCloseStates.confirmation)
     
     data = await state.get_data()
-    request_number = data.get("request_number", "N/A")
+    request_label = data.get("request_label", "N/A")
     
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Подтвердить закрытие", callback_data="manager:close_confirm")
@@ -525,7 +620,7 @@ async def manager_close_comment(message: Message, state: FSMContext):
     
     comment_text = f"\n\nКомментарий: {comment}" if comment else "\n\nКомментарий не указан"
     await message.answer(
-        f"📋 <b>Подтверждение закрытия заявки {request_number}</b>\n\n"
+        f"📋 <b>Подтверждение закрытия заявки {request_label}</b>\n\n"
         f"Вы уверены, что хотите закрыть эту заявку?{comment_text}",
         reply_markup=builder.as_markup(),
     )
@@ -584,8 +679,9 @@ async def manager_close_confirm(callback: CallbackQuery, state: FSMContext):
             )
             await session.commit()
             
+            label = format_request_label(request)
             await callback.message.answer(
-                f"✅ <b>Заявка {request.number} успешно закрыта</b>\n\n"
+                f"✅ <b>Заявка {label} успешно закрыта</b>\n\n"
                 f"Все работы завершены, заявка закрыта.",
             )
             await callback.answer("Заявка закрыта")
@@ -595,7 +691,7 @@ async def manager_close_confirm(callback: CallbackQuery, state: FSMContext):
                 try:
                     await callback.message.bot.send_message(
                         chat_id=int(request.engineer.telegram_id),
-                        text=f"✅ Заявка {request.number} закрыта суперадмином.",
+                        text=f"✅ Заявка {label} закрыта суперадмином.",
                     )
                 except Exception:
                     pass
@@ -657,7 +753,7 @@ async def manager_back_to_list(callback: CallbackQuery):
     for req in requests:
         status_emoji = "✅" if req.status.value == "closed" else "🔄" if req.status.value in ["completed", "ready_for_sign"] else "📋"
         builder.button(
-            text=f"{status_emoji} {req.number} · {req.status.value}",
+            text=f"{status_emoji} {format_request_label(req)} · {req.status.value}",
             callback_data=f"manager:detail:{req.id}",
         )
     builder.adjust(1)

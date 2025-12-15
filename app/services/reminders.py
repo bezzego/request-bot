@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.infrastructure.db.models import Request, RequestReminder, RequestStatus
 from app.infrastructure.db.session import async_session
+from app.utils.request_formatters import format_request_label
 from app.utils.timezone import format_moscow, now_moscow
 
 
@@ -44,36 +45,37 @@ class ReminderService:
     def build_message(reminder: RequestReminder) -> str:
         request = reminder.request
         status_title = STATUS_TITLES.get(request.status, request.status.value)
+        request_label = format_request_label(request)
         if reminder.reminder_type.name == "INSPECTION":
             inspection_time = format_moscow(reminder.scheduled_at) or "не задано"
             return (
-                f"🔔 Напоминание об осмотре по заявке {request.number}\n"
+                f"🔔 Напоминание об осмотре по заявке {request_label}\n"
                 f"Объект: {request.object.name if request.object else request.title}\n"
                 f"Время: {inspection_time}\n"
                 f"Адрес: {request.address}"
             )
         if reminder.reminder_type.name == "DOCUMENT_SIGN":
             return (
-                f"📝 Требуется подписать акт по заявке {request.number}.\n"
+                f"📝 Требуется подписать акт по заявке {request_label}.\n"
                 f"Текущий статус: {status_title}. Подтвердите документы и уведомите заказчика."
             )
         if reminder.reminder_type.name == "DEADLINE":
             deadline_time = format_moscow(reminder.scheduled_at) or "не указано"
             return (
-                f"⏰ Срок выполнения по заявке {request.number} истекает "
+                f"⏰ Срок выполнения по заявке {request_label} истекает "
                 f"{deadline_time}. Проверьте готовность и обновите отчёт."
             )
         if reminder.reminder_type.name == "OVERDUE":
             return (
-                f"⚠️ Заявка {request.number} просрочена! Текущий статус: {status_title}.\n"
+                f"⚠️ Заявка {request_label} просрочена! Текущий статус: {status_title}.\n"
                 f"Свяжитесь с мастером {request.master.full_name if request.master else '—'} и обновите план."
             )
         if reminder.reminder_type.name == "REPORT":
             return (
-                f"📊 Контроль заявки {request.number}.\n"
+                f"📊 Контроль заявки {request_label}.\n"
                 f"Статус: {status_title}. Обновите фактические данные и отправьте отчёт, если требуется."
             )
-        return f"Напоминание по заявке {request.number}."
+        return f"Напоминание по заявке {request_label}."
 
     @staticmethod
     async def mark_sent(session: AsyncSession, reminder_id: int, payload: str | None = None) -> None:

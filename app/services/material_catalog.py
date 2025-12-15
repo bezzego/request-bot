@@ -7,7 +7,8 @@ from typing import Iterable, Sequence
 import json
 
 
-CATALOG_FILE = Path(__file__).resolve().parents[1] / "config" / "material_catalog.json"
+# Используем объединённый файл с работами и материалами
+CATALOG_FILE = Path(__file__).resolve().parents[1] / "config" / "mat.json"
 
 
 @dataclass(slots=True, frozen=True)
@@ -80,49 +81,46 @@ class MaterialCatalog:
 def get_material_catalog() -> MaterialCatalog:
     """Возвращает кэшированный каталог материалов из JSON."""
     raw_data = _load_catalog_json()
+    works = _extract_works(raw_data)
+
     categories: dict[str, MaterialCatalogCategory] = {}
     items: dict[str, MaterialCatalogItem] = {}
     root_ids: list[str] = []
 
     counters = {"category": 0, "item": 0}
+    category_ids_by_name: dict[str, str] = {}
+    material_ids_by_name: dict[str, str] = {}
 
-    def add_category(node: dict, parent_id: str | None, parent_path: tuple[str, ...]) -> str:
-        counters["category"] += 1
-        category_id = f"mc{counters['category']}"
-        name = str(node.get("название") or node.get("name") or "")
-        path = parent_path + (name,)
-        category = MaterialCatalogCategory(
-            id=category_id,
-            name=name,
-            parent_id=parent_id,
-            children_ids=(),
-            item_ids=(),
-            path=path,
-        )
-        categories[category_id] = category
-        if parent_id:
-            parent = categories[parent_id]
-            categories[parent_id] = MaterialCatalogCategory(
-                id=parent.id,
-                name=parent.name,
-                parent_id=parent.parent_id,
-                children_ids=parent.children_ids + (category_id,),
-                item_ids=parent.item_ids,
-                path=parent.path,
+    for work in works:
+        group_name = str(work.get("group") or work.get("группа") or "Прочее")
+        if group_name not in category_ids_by_name:
+            counters["category"] += 1
+            category_id = f"mc{counters['category']}"
+            category = MaterialCatalogCategory(
+                id=category_id,
+                name=group_name,
+                parent_id=None,
+                children_ids=(),
+                item_ids=(),
+                path=(group_name,),
             )
-        else:
+            categories[category_id] = category
+            category_ids_by_name[group_name] = category_id
             root_ids.append(category_id)
 
-        # Поддерживаем как "материалы", так и "работы" для обратной совместимости
-        materials = node.get("материалы") or node.get("materials") or node.get("работы") or node.get("works") or []
-        item_ids: list[str] = []
+        category_id = category_ids_by_name[group_name]
+        materials = work.get("materials") or work.get("материалы") or []
         for material in materials:
+            item_name = str(material.get("name") or material.get("название") or "")
+            # Не дублируем одинаковые материалы
+            if item_name in material_ids_by_name:
+                continue
+
             counters["item"] += 1
             item_id = f"m{counters['item']}"
-            item_name = str(material.get("название") or material.get("name") or "")
-            unit = material.get("единица") or material.get("unit")
-            price = float(material.get("цена") or material.get("price") or 0)
-            formula = material.get("формула") or material.get("formula")
+            unit = material.get("unit") or material.get("единица")
+            price = float(material.get("price_per_unit") or material.get("цена") or material.get("price") or 0)
+            formula = material.get("formula") or material.get("формула")
             item = MaterialCatalogItem(
                 id=item_id,
                 category_id=category_id,
@@ -130,30 +128,20 @@ def get_material_catalog() -> MaterialCatalog:
                 unit=str(unit) if unit else None,
                 price=price,
                 formula=str(formula) if formula else None,
-                path=path + (item_name,),
+                path=(group_name, item_name),
             )
             items[item_id] = item
-            item_ids.append(item_id)
+            material_ids_by_name[item_name] = item_id
 
-        if item_ids:
             cat = categories[category_id]
             categories[category_id] = MaterialCatalogCategory(
                 id=cat.id,
                 name=cat.name,
                 parent_id=cat.parent_id,
                 children_ids=cat.children_ids,
-                item_ids=cat.item_ids + tuple(item_ids),
+                item_ids=cat.item_ids + (item_id,),
                 path=cat.path,
             )
-
-        subcategories = node.get("подкатегории") or node.get("subcategories") or []
-        for child in subcategories:
-            add_category(child, category_id, path)
-
-        return category_id
-
-    for node in raw_data:
-        add_category(node, parent_id=None, parent_path=())
 
     return MaterialCatalog(categories=categories, items=items, root_ids=root_ids)
 
@@ -164,7 +152,20 @@ def _load_catalog_json() -> Sequence[dict]:
 
     with CATALOG_FILE.open("r", encoding="utf-8") as fh:
         data = json.load(fh)
-    if not isinstance(data, list):
-        raise ValueError("Файл каталога материалов должен содержать список категорий.")
     return data
+
+
+def _extract_works(data: Sequence[dict] | dict) -> Sequence[dict]:
+    """
+    Поддержка нового формата: корневой объект с ключом "works".
+    Оставляем совместимость со старым списком.
+    """
+    if isinstance(data, dict):
+        works = data.get("works")
+        if isinstance(works, list):
+            return works
+        raise ValueError("Файл каталога должен содержать список в ключе 'works'.")
+    if isinstance(data, list):
+        return data
+    raise ValueError("Файл каталога материалов должен содержать список категорий или ключ 'works'.")
 

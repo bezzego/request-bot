@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.infrastructure.db.models import Feedback, Request, RequestStatus, User, UserRole
 from app.infrastructure.db.session import async_session
+from app.utils.request_formatters import format_request_label
 from app.utils.timezone import format_moscow
 
 router = Router()
@@ -54,7 +55,7 @@ async def client_requests(message: Message):
     for req in requests:
         status = STATUS_TITLES.get(req.status, req.status.value)
         builder.button(
-            text=f"{req.number} · {status}",
+            text=f"{format_request_label(req)} · {status}",
             callback_data=f"client:detail:{req.id}",
         )
     builder.adjust(1)
@@ -103,7 +104,7 @@ async def client_back(callback: CallbackQuery):
     builder = InlineKeyboardBuilder()
     for req in requests:
         builder.button(
-            text=f"{req.number} · {STATUS_TITLES.get(req.status, req.status.value)}",
+            text=f"{format_request_label(req)} · {STATUS_TITLES.get(req.status, req.status.value)}",
             callback_data=f"client:detail:{req.id}",
         )
     builder.adjust(1)
@@ -138,7 +139,7 @@ async def client_feedback_list(message: Message):
     builder = InlineKeyboardBuilder()
     for req in eligible:
         builder.button(
-            text=f"{req.number} · {req.title}",
+            text=f"{format_request_label(req)} · {req.title}",
             callback_data=f"client:feedback:{req.id}",
         )
     builder.adjust(1)
@@ -301,9 +302,10 @@ def _format_request_detail(request: Request) -> str:
     due = format_moscow(request.due_at) or "не задан"
     engineer = request.engineer.full_name if request.engineer else "—"
     master = request.master.full_name if request.master else "—"
+    label = format_request_label(request)
 
     lines = [
-        f"📄 <b>{request.number}</b>",
+        f"📄 <b>{label}</b>",
         f"Название: {request.title}",
         f"Статус: {status}",
         f"Срок устранения: {due}",
