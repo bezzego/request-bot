@@ -154,7 +154,7 @@ def format_quantity_message(
         f"Текущий факт: {current_display}\n"
         f"Новый факт: {new_display}\n"
         f"Расчётная стоимость: {new_cost:,.2f} ₽\n\n"
-        "Используйте кнопки, чтобы скорректировать объём. «Сохранить» перезапишет факт."
+        "Используйте кнопки для корректировки или нажмите «✍️ Ввести вручную» для точного значения. «Сохранить» перезапишет факт."
     ).replace(",", " ")
 
 
@@ -189,6 +189,10 @@ def build_quantity_keyboard(
     )
     prefix = "material" if is_material else "work"
     builder.button(
+        text="✍️ Ввести вручную",
+        callback_data=f"{prefix}:{role_key}:{request_id}:manual:{catalog_item.id}",
+    )
+    builder.button(
         text="✅ Сохранить",
         callback_data=f"{prefix}:{role_key}:{request_id}:save:{catalog_item.id}:{encode_quantity(new_quantity)}",
     )
@@ -200,7 +204,7 @@ def build_quantity_keyboard(
         text="✖️ Закрыть",
         callback_data=f"{prefix}:{role_key}:{request_id}:close:{catalog_item.category_id}",
     )
-    builder.adjust(4, 4, 2, 2)
+    builder.adjust(4, 4, 1, 1, 1, 1)
     return builder.as_markup()
 
 

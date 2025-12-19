@@ -52,6 +52,9 @@ class EngineerStates(StatesGroup):
     inspection_waiting_photos = State()  # Ожидание отправки фото
     inspection_waiting_comment = State()  # Ожидание комментария
     inspection_final_confirm = State()  # Финальное подтверждение завершения осмотра
+    # Состояния для ввода количества вручную
+    quantity_input_plan = State()  # Ввод количества для плана
+    quantity_input_fact = State()  # Ввод количества для факта
 
 
 class EngineerCreateStates(StatesGroup):
@@ -900,7 +903,7 @@ async def engineer_add_plan(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("work:ep:"))
-async def engineer_work_catalog_plan(callback: CallbackQuery):
+async def engineer_work_catalog_plan(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split(":")
     if len(parts) < 4:
         await callback.answer()
@@ -1041,6 +1044,31 @@ async def engineer_work_catalog_plan(callback: CallbackQuery):
             await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
             return
 
+        if action == "manual":
+            if len(rest) < 1:
+                await callback.answer()
+                return
+            item_id = rest[0]
+            catalog_item = catalog.get_item(item_id)
+            if not catalog_item:
+                await callback.answer("Работа не найдена в каталоге.", show_alert=True)
+                return
+            
+            await state.update_data(
+                quantity_request_id=request_id,
+                quantity_item_id=item_id,
+                quantity_role_key=role_key,
+                quantity_is_material=False,
+            )
+            await state.set_state(EngineerStates.quantity_input_plan)
+            unit = catalog_item.unit or "шт"
+            await callback.message.answer(
+                f"Введите количество вручную (единица измерения: {unit}).\n"
+                "Можно использовать десятичные числа, например: 2.5 или 10.75"
+            )
+            await callback.answer()
+            return
+
         if action == "close":
             try:
                 await callback.message.delete()
@@ -1082,7 +1110,7 @@ async def engineer_update_fact(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("material:epm:"))
-async def engineer_material_catalog_plan(callback: CallbackQuery):
+async def engineer_material_catalog_plan(callback: CallbackQuery, state: FSMContext):
     """Обработчик каталога материалов для добавления в план инженером."""
     parts = callback.data.split(":")
     if len(parts) < 4:
@@ -1229,6 +1257,31 @@ async def engineer_material_catalog_plan(callback: CallbackQuery):
             await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
             return
 
+        if action == "manual":
+            if len(rest) < 1:
+                await callback.answer()
+                return
+            item_id = rest[0]
+            catalog_item = catalog.get_item(item_id)
+            if not catalog_item:
+                await callback.answer("Материал не найден в каталоге.", show_alert=True)
+                return
+            
+            await state.update_data(
+                quantity_request_id=request_id,
+                quantity_item_id=item_id,
+                quantity_role_key=role_key,
+                quantity_is_material=True,
+            )
+            await state.set_state(EngineerStates.quantity_input_plan)
+            unit = catalog_item.unit or "шт"
+            await callback.message.answer(
+                f"Введите количество вручную (единица измерения: {unit}).\n"
+                "Можно использовать десятичные числа, например: 2.5 или 10.75"
+            )
+            await callback.answer()
+            return
+
         if action == "close":
             try:
                 await callback.message.delete()
@@ -1241,7 +1294,7 @@ async def engineer_material_catalog_plan(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("material:em:"))
-async def engineer_material_catalog_fact(callback: CallbackQuery):
+async def engineer_material_catalog_fact(callback: CallbackQuery, state: FSMContext):
     """Обработчик каталога материалов для обновления факта инженером."""
     parts = callback.data.split(":")
     if len(parts) < 4:
@@ -1388,6 +1441,31 @@ async def engineer_material_catalog_fact(callback: CallbackQuery):
             await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
             return
 
+        if action == "manual":
+            if len(rest) < 1:
+                await callback.answer()
+                return
+            item_id = rest[0]
+            catalog_item = catalog.get_item(item_id)
+            if not catalog_item:
+                await callback.answer("Материал не найден в каталоге.", show_alert=True)
+                return
+            
+            await state.update_data(
+                quantity_request_id=request_id,
+                quantity_item_id=item_id,
+                quantity_role_key=role_key,
+                quantity_is_material=True,
+            )
+            await state.set_state(EngineerStates.quantity_input_fact)
+            unit = catalog_item.unit or "шт"
+            await callback.message.answer(
+                f"Введите количество вручную (единица измерения: {unit}).\n"
+                "Можно использовать десятичные числа, например: 2.5 или 10.75"
+            )
+            await callback.answer()
+            return
+
         if action == "close":
             try:
                 await callback.message.delete()
@@ -1400,7 +1478,7 @@ async def engineer_material_catalog_fact(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("work:e:"))
-async def engineer_work_catalog(callback: CallbackQuery):
+async def engineer_work_catalog(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split(":")
     if len(parts) < 4:
         await callback.answer()
@@ -1541,6 +1619,31 @@ async def engineer_work_catalog(callback: CallbackQuery):
             await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
             return
 
+        if action == "manual":
+            if len(rest) < 1:
+                await callback.answer()
+                return
+            item_id = rest[0]
+            catalog_item = catalog.get_item(item_id)
+            if not catalog_item:
+                await callback.answer("Работа не найдена в каталоге.", show_alert=True)
+                return
+            
+            await state.update_data(
+                quantity_request_id=request_id,
+                quantity_item_id=item_id,
+                quantity_role_key=role_key,
+                quantity_is_material=False,
+            )
+            await state.set_state(EngineerStates.quantity_input_fact)
+            unit = catalog_item.unit or "шт"
+            await callback.message.answer(
+                f"Введите количество вручную (единица измерения: {unit}).\n"
+                "Можно использовать десятичные числа, например: 2.5 или 10.75"
+            )
+            await callback.answer()
+            return
+
         if action == "close":
             try:
                 await callback.message.delete()
@@ -1550,6 +1653,140 @@ async def engineer_work_catalog(callback: CallbackQuery):
             return
 
     await callback.answer()
+
+
+@router.message(StateFilter(EngineerStates.quantity_input_plan))
+async def engineer_quantity_input_plan(message: Message, state: FSMContext):
+    """Обработка ручного ввода количества для плана."""
+    try:
+        quantity = float(message.text.strip().replace(",", "."))
+        if quantity < 0:
+            await message.answer("Количество не может быть отрицательным. Введите положительное число.")
+            return
+    except ValueError:
+        await message.answer("Неверный формат. Введите число (можно с десятичной частью, например: 2.5).")
+        return
+    
+    data = await state.get_data()
+    request_id = data.get("quantity_request_id")
+    item_id = data.get("quantity_item_id")
+    role_key = data.get("quantity_role_key")
+    is_material = data.get("quantity_is_material", False)
+    
+    if not request_id or not item_id:
+        await message.answer("Ошибка. Начните процесс заново.")
+        await state.clear()
+        return
+    
+    from app.services.work_catalog import get_work_catalog
+    from app.services.material_catalog import get_material_catalog
+    
+    catalog = get_material_catalog() if is_material else get_work_catalog()
+    catalog_item = catalog.get_item(item_id)
+    
+    if not catalog_item:
+        await message.answer("Элемент каталога не найден.")
+        await state.clear()
+        return
+    
+    async with async_session() as session:
+        engineer = await _get_engineer(session, message.from_user.id)
+        if not engineer:
+            await message.answer("Нет доступа.")
+            await state.clear()
+            return
+        
+        request = await _load_request(session, engineer.id, request_id)
+        if not request:
+            await message.answer("Заявка не найдена.")
+            await state.clear()
+            return
+        
+        header = _catalog_header(request)
+        work_item = await _get_work_item(session, request.id, catalog_item.name)
+        current_quantity = (
+            float(work_item.planned_quantity)
+            if work_item and work_item.planned_quantity is not None
+            else None
+        )
+        
+        text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=quantity, current_quantity=current_quantity, is_material=is_material)}"
+        markup = build_quantity_keyboard(
+            catalog_item=catalog_item,
+            role_key=role_key,
+            request_id=request_id,
+            new_quantity=quantity,
+            is_material=is_material,
+        )
+        await message.answer(text, reply_markup=markup)
+        await state.clear()
+
+
+@router.message(StateFilter(EngineerStates.quantity_input_fact))
+async def engineer_quantity_input_fact(message: Message, state: FSMContext):
+    """Обработка ручного ввода количества для факта."""
+    try:
+        quantity = float(message.text.strip().replace(",", "."))
+        if quantity < 0:
+            await message.answer("Количество не может быть отрицательным. Введите положительное число.")
+            return
+    except ValueError:
+        await message.answer("Неверный формат. Введите число (можно с десятичной частью, например: 2.5).")
+        return
+    
+    data = await state.get_data()
+    request_id = data.get("quantity_request_id")
+    item_id = data.get("quantity_item_id")
+    role_key = data.get("quantity_role_key")
+    is_material = data.get("quantity_is_material", False)
+    
+    if not request_id or not item_id:
+        await message.answer("Ошибка. Начните процесс заново.")
+        await state.clear()
+        return
+    
+    from app.services.work_catalog import get_work_catalog
+    from app.services.material_catalog import get_material_catalog
+    
+    catalog = get_material_catalog() if is_material else get_work_catalog()
+    catalog_item = catalog.get_item(item_id)
+    
+    if not catalog_item:
+        await message.answer("Элемент каталога не найден.")
+        await state.clear()
+        return
+    
+    async with async_session() as session:
+        engineer = await _get_engineer(session, message.from_user.id)
+        if not engineer:
+            await message.answer("Нет доступа.")
+            await state.clear()
+            return
+        
+        request = await _load_request(session, engineer.id, request_id)
+        if not request:
+            await message.answer("Заявка не найдена.")
+            await state.clear()
+            return
+        
+        header = _catalog_header(request)
+        work_item = await _get_work_item(session, request.id, catalog_item.name)
+        current_quantity = (
+            float(work_item.actual_quantity)
+            if work_item and work_item.actual_quantity is not None
+            else None
+        )
+        
+        text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=quantity, current_quantity=current_quantity, is_material=is_material)}"
+        markup = build_quantity_keyboard(
+            catalog_item=catalog_item,
+            role_key=role_key,
+            request_id=request_id,
+            new_quantity=quantity,
+            is_material=is_material,
+        )
+        await message.answer(text, reply_markup=markup)
+        await state.clear()
 
 
 @router.callback_query(F.data.startswith("eng:assign_master:"))
