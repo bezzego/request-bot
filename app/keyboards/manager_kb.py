@@ -7,6 +7,7 @@ manager_kb = ReplyKeyboardMarkup(
         [KeyboardButton(text="🔍 Фильтр заявок")],
         [KeyboardButton(text="📊 Отчёты и статистика"), KeyboardButton(text="📤 Экспорт Excel")],
         [KeyboardButton(text="👥 Управление пользователями")],
+        [KeyboardButton(text="⚙️ Настройки")],
     ],
     resize_keyboard=True,
 )

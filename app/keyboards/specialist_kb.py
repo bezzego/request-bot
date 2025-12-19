@@ -6,6 +6,7 @@ specialist_kb = ReplyKeyboardMarkup(
         [KeyboardButton(text="📄 Мои заявки"), KeyboardButton(text="📋 Мои заявки")],
         [KeyboardButton(text="🔍 Фильтр заявок")],
         [KeyboardButton(text="📊 Аналитика")],
+        [KeyboardButton(text="⚙️ Настройки")],
     ],
     resize_keyboard=True,
 )
