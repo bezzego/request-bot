@@ -375,13 +375,19 @@ async def master_finish_photo_prompt(callback: CallbackQuery, state: FSMContext)
 
     finish_context["new_photo_count"] = 0
     finish_context["photos_confirmed"] = False
+    finish_context["photos"] = []
+    finish_context["videos"] = []
+    finish_context["status_message_id"] = None
     await _save_finish_context(state, finish_context)
     await state.set_state(MasterStates.finish_photo_upload)
-    await callback.message.answer(
-        "Прикрепите все необходимые фото выполненной работы.\n"
+    status_msg = await callback.message.answer(
+        "Прикрепите все необходимые фото/видео выполненной работы.\n"
+        "Можно отправить несколько фото/видео подряд.\n"
         "Когда закончите, нажмите «✅ Подтвердить фото». Для отмены отправьте «Отмена».",
         reply_markup=finish_photo_kb,
     )
+    finish_context["status_message_id"] = status_msg.message_id
+    await _save_finish_context(state, finish_context)
     await callback.answer()
 
 
@@ -1017,44 +1023,92 @@ async def master_photo_instruction(message: Message):
 
 @router.message(StateFilter(MasterStates.finish_photo_upload), F.photo)
 async def master_finish_photo_collect(message: Message, state: FSMContext):
-    """Сохраняет фото, отправленные во время мастера завершения."""
+    """Собирает фото, отправленные во время мастера завершения."""
     finish_context = await _load_finish_context(state)
     if not finish_context:
         await message.answer("Процесс завершения не найден. Нажмите «Завершить работу» ещё раз.", reply_markup=master_kb)
         await state.clear()
         return
 
-    request_id = finish_context.get("request_id")
-    async with async_session() as session:
-        master = await _get_master(session, message.from_user.id)
-        if not master:
-            await message.answer("Нет доступа к заявке.", reply_markup=master_kb)
-            await state.clear()
-            return
-        request = await _load_request(session, master.id, request_id)
-        if not request:
-            await message.answer("Заявка не найдена.", reply_markup=master_kb)
-            await state.clear()
-            return
-
-        photo = message.photo[-1]
-        new_photo = Photo(
-            request_id=request.id,
-            type=PhotoType.AFTER,
-            file_id=photo.file_id,
-            caption=message.caption,
-        )
-        session.add(new_photo)
-        await session.commit()
-
-    finish_context["new_photo_count"] = int(finish_context.get("new_photo_count") or 0) + 1
-    new_count = finish_context["new_photo_count"]
+    photo = message.photo[-1]
+    caption = (message.caption or "").strip() or None
+    
+    # Добавляем фото в список
+    photos = finish_context.get("photos", [])
+    photos.append({
+        "file_id": photo.file_id,
+        "caption": caption,
+        "is_video": False,
+    })
+    
+    videos = finish_context.get("videos", [])
+    photo_count = len(photos)
+    video_count = len(videos)
+    
+    finish_context["photos"] = photos
+    finish_context["new_photo_count"] = photo_count + video_count
     await _save_finish_context(state, finish_context)
-    await message.answer(
-        f"Фото сохранено. За эту смену загружено {new_count} фото.\n"
-        "Когда отправите все фото, нажмите «✅ Подтвердить фото».",
-        reply_markup=finish_photo_kb,
-    )
+    
+    # Обновляем статусное сообщение
+    status_message_id = finish_context.get("status_message_id")
+    if status_message_id:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=status_message_id,
+                text=(
+                    f"📷 Получено: {photo_count} фото, {video_count} видео\n"
+                    "Отправьте ещё фото/видео или нажмите «✅ Подтвердить фото»."
+                ),
+                reply_markup=finish_photo_kb,
+            )
+        except Exception:
+            pass
+
+
+@router.message(StateFilter(MasterStates.finish_photo_upload), F.video)
+async def master_finish_video_collect(message: Message, state: FSMContext):
+    """Собирает видео, отправленные во время мастера завершения."""
+    finish_context = await _load_finish_context(state)
+    if not finish_context:
+        await message.answer("Процесс завершения не найден. Нажмите «Завершить работу» ещё раз.", reply_markup=master_kb)
+        await state.clear()
+        return
+
+    video = message.video
+    caption = (message.caption or "").strip() or None
+    
+    # Добавляем видео в список
+    videos = finish_context.get("videos", [])
+    videos.append({
+        "file_id": video.file_id,
+        "caption": caption,
+        "is_video": True,
+    })
+    
+    photos = finish_context.get("photos", [])
+    photo_count = len(photos)
+    video_count = len(videos)
+    
+    finish_context["videos"] = videos
+    finish_context["new_photo_count"] = photo_count + video_count
+    await _save_finish_context(state, finish_context)
+    
+    # Обновляем статусное сообщение
+    status_message_id = finish_context.get("status_message_id")
+    if status_message_id:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=status_message_id,
+                text=(
+                    f"📷 Получено: {photo_count} фото, {video_count} видео\n"
+                    "Отправьте ещё фото/видео или нажмите «✅ Подтвердить фото»."
+                ),
+                reply_markup=finish_photo_kb,
+            )
+        except Exception:
+            pass
 
 
 @router.message(StateFilter(MasterStates.finish_photo_upload))
@@ -1075,16 +1129,72 @@ async def master_finish_photo_text(message: Message, state: FSMContext):
         return
 
     if lower_text == PHOTO_CONFIRM_TEXT.lower() or "подтверд" in lower_text:
-        new_photos = int(finish_context.get("new_photo_count") or 0)
-        if new_photos <= 0:
-            await message.answer("Отправьте хотя бы одно фото перед подтверждением.")
+        photos = finish_context.get("photos", [])
+        videos = finish_context.get("videos", [])
+        total_files = len(photos) + len(videos)
+        
+        if total_files <= 0:
+            await message.answer("Отправьте хотя бы одно фото или видео перед подтверждением.")
             return
 
+        # Сохраняем все фото и видео в БД
+        request_id = finish_context.get("request_id")
+        async with async_session() as session:
+            master = await _get_master(session, message.from_user.id)
+            if not master:
+                await message.answer("Нет доступа к заявке.", reply_markup=master_kb)
+                await state.clear()
+                return
+            
+            request = await _load_request(session, master.id, request_id)
+            if not request:
+                await message.answer("Заявка не найдена.", reply_markup=master_kb)
+                await state.clear()
+                return
+            
+            # Сохраняем все фото
+            for photo_data in photos:
+                new_photo = Photo(
+                    request_id=request.id,
+                    type=PhotoType.AFTER,
+                    file_id=photo_data["file_id"],
+                    caption=photo_data.get("caption"),
+                )
+                session.add(new_photo)
+            
+            # Сохраняем все видео (как фото с типом AFTER)
+            for video_data in videos:
+                new_photo = Photo(
+                    request_id=request.id,
+                    type=PhotoType.AFTER,
+                    file_id=video_data["file_id"],
+                    caption=video_data.get("caption"),
+                )
+                session.add(new_photo)
+            
+            await session.commit()
+            logger.info(
+                "Master finish: saved %s photos and %s videos for request_id=%s user=%s",
+                len(photos),
+                len(videos),
+                request.id,
+                message.from_user.id,
+            )
+
         finish_context["photos_confirmed"] = True
+        finish_context["new_photo_count"] = total_files
         await _save_finish_context(state, finish_context)
         await state.set_state(MasterStates.finish_dashboard)
+        
+        files_text = []
+        if len(photos) > 0:
+            files_text.append(f"{len(photos)} фото")
+        if len(videos) > 0:
+            files_text.append(f"{len(videos)} видео")
+        files_summary = " и ".join(files_text) if files_text else "файлы"
+        
         await message.answer(
-            f"Вы отправили {new_photos} фото. Спасибо!",
+            f"✅ Сохранено: {files_summary}. Спасибо!",
             reply_markup=master_kb,
         )
         await _render_finish_summary(message.bot, finish_context, state)

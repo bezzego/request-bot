@@ -669,12 +669,14 @@ async def engineer_inspection(callback: CallbackQuery, state: FSMContext):
     await state.update_data(
         request_id=request_id,
         photos=[],
+        videos=[],
         photo_file_ids=[],
+        status_message_id=None,
     )
     
     builder = InlineKeyboardBuilder()
     builder.button(
-        text="📷 Отправить фото",
+        text="📷 Отправить фото/видео",
         callback_data=f"eng:inspection:start_photos:{request_id}",
     )
     builder.button(
@@ -684,8 +686,9 @@ async def engineer_inspection(callback: CallbackQuery, state: FSMContext):
     builder.adjust(1)
     
     await callback.message.answer(
-        "Для завершения осмотра отправьте фото дефектов.\n"
-        "Нажмите кнопку «📷 Отправить фото», чтобы начать загрузку.",
+        "Для завершения осмотра отправьте фото или видео дефектов.\n"
+        "Нажмите кнопку «📷 Отправить фото/видео», чтобы начать загрузку.\n"
+        "Можно отправить несколько фото/видео подряд, затем подтвердить все сразу.",
         reply_markup=builder.as_markup(),
     )
     await callback.answer()
@@ -706,11 +709,13 @@ async def engineer_inspection_start_photos(callback: CallbackQuery, state: FSMCo
         return
 
     await state.set_state(EngineerStates.inspection_waiting_photos)
-    await callback.message.edit_text(
-        "📷 Жду ваши фотографии.\n"
-        "Отправьте все необходимые фото дефектов. После отправки всех фото нажмите «✅ Подтвердить фото».",
-        reply_markup=_waiting_photos_keyboard(request_id),
+    status_msg = await callback.message.edit_text(
+        "📷 Жду ваши фотографии и видео.\n"
+        "Отправьте все необходимые фото/видео дефектов подряд.\n"
+        "После отправки всех файлов нажмите «✅ Подтвердить».",
+        reply_markup=_waiting_photos_keyboard(request_id, photo_count=0, video_count=0),
     )
+    await state.update_data(status_message_id=status_msg.message_id)
     await callback.answer()
 
 
@@ -729,11 +734,14 @@ async def engineer_inspection_confirm_photos(callback: CallbackQuery, state: FSM
         return
 
     photos = data.get("photos", [])
-    if not photos:
-        await callback.answer("Сначала отправьте хотя бы одно фото.", show_alert=True)
+    videos = data.get("videos", [])
+    total_files = len(photos) + len(videos)
+    
+    if total_files == 0:
+        await callback.answer("Сначала отправьте хотя бы одно фото или видео.", show_alert=True)
         return
 
-    # Сохраняем фото в БД
+    # Сохраняем фото и видео в БД
     async with async_session() as session:
         engineer = await _get_engineer(session, callback.from_user.id)
         if not engineer:
@@ -757,18 +765,36 @@ async def engineer_inspection_confirm_photos(callback: CallbackQuery, state: FSM
             )
             session.add(new_photo)
         
+        # Сохраняем все видео (как фото с типом BEFORE)
+        for video_data in videos:
+            new_photo = Photo(
+                request_id=request.id,
+                type=PhotoType.BEFORE,
+                file_id=video_data["file_id"],
+                caption=video_data.get("caption"),
+            )
+            session.add(new_photo)
+        
         await session.commit()
         logger.info(
-            "Saved %s photos for request_id=%s user=%s",
+            "Saved %s photos and %s videos for request_id=%s user=%s",
             len(photos),
+            len(videos),
             request.id,
             callback.from_user.id,
         )
     
     # Переходим к вводу комментария
     await state.set_state(EngineerStates.inspection_waiting_comment)
+    files_text = []
+    if len(photos) > 0:
+        files_text.append(f"{len(photos)} фото")
+    if len(videos) > 0:
+        files_text.append(f"{len(videos)} видео")
+    files_summary = " и ".join(files_text) if files_text else "файлы"
+    
     await callback.message.edit_text(
-        "✅ Фото сохранены.\n\n"
+        f"✅ Сохранено: {files_summary}.\n\n"
         "Напишите комментарий к осмотру (или отправьте «-», если комментарий не требуется).",
     )
     await callback.answer()
@@ -1930,24 +1956,86 @@ async def engineer_inspection_photo(message: Message, state: FSMContext):
     photos.append({
         "file_id": photo.file_id,
         "caption": caption,
+        "is_video": False,
     })
+    
+    videos = data.get("videos", [])
+    photo_count = len(photos)
+    video_count = len(videos)
     
     await state.update_data(photos=photos)
     
+    # Обновляем статусное сообщение
+    status_message_id = data.get("status_message_id")
+    if status_message_id:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=status_message_id,
+                text=(
+                    f"📷 Получено: {photo_count} фото, {video_count} видео\n"
+                    "Отправьте ещё фото/видео или нажмите «✅ Подтвердить»."
+                ),
+                reply_markup=_waiting_photos_keyboard(request_id, photo_count, video_count),
+            )
+        except Exception:
+            pass
+
+
+@router.message(StateFilter(EngineerStates.inspection_waiting_photos), F.video)
+async def engineer_inspection_video(message: Message, state: FSMContext):
+    """Обработка видео во время завершения осмотра."""
+    data = await state.get_data()
+    request_id = data.get("request_id")
+    
+    if not request_id:
+        await message.answer("Ошибка. Начните процесс заново.")
+        await state.clear()
+        return
+    
+    # Получаем видео
+    video = message.video
+    caption = (message.caption or "").strip() or None
+    
+    # Добавляем видео в список
+    videos = data.get("videos", [])
+    videos.append({
+        "file_id": video.file_id,
+        "caption": caption,
+        "is_video": True,
+    })
+    
+    photos = data.get("photos", [])
     photo_count = len(photos)
-    await message.answer(
-        f"✅ Фото {photo_count} получено.\n"
-        f"Отправлено фото: {photo_count}\n\n"
-        "Отправьте ещё фото или нажмите «✅ Подтвердить фото».",
-        reply_markup=_waiting_photos_keyboard(request_id),
-    )
+    video_count = len(videos)
+    
+    await state.update_data(videos=videos)
+    
+    # Обновляем статусное сообщение
+    status_message_id = data.get("status_message_id")
+    if status_message_id:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=status_message_id,
+                text=(
+                    f"📷 Получено: {photo_count} фото, {video_count} видео\n"
+                    "Отправьте ещё фото/видео или нажмите «✅ Подтвердить»."
+                ),
+                reply_markup=_waiting_photos_keyboard(request_id, photo_count, video_count),
+            )
+        except Exception:
+            pass
 
 
 @router.message(StateFilter(EngineerStates.inspection_waiting_photos), F.document)
 async def engineer_inspection_document(message: Message, state: FSMContext):
     """Обработка документов-изображений во время завершения осмотра."""
     doc = message.document
-    if not doc or not (doc.mime_type or "").startswith("image/"):
+    mime_type = doc.mime_type or ""
+    
+    # Поддерживаем только изображения
+    if not mime_type.startswith("image/"):
         return
 
     data = await state.get_data()
@@ -1966,29 +2054,44 @@ async def engineer_inspection_document(message: Message, state: FSMContext):
     photos.append({
         "file_id": doc.file_id,
         "caption": caption,
+        "is_video": False,
     })
+    
+    videos = data.get("videos", [])
+    photo_count = len(photos)
+    video_count = len(videos)
     
     await state.update_data(photos=photos)
     
-    photo_count = len(photos)
-    await message.answer(
-        f"✅ Фото {photo_count} получено (документ).\n"
-        f"Отправлено фото: {photo_count}\n\n"
-        "Отправьте ещё фото или нажмите «✅ Подтвердить фото».",
-        reply_markup=_waiting_photos_keyboard(request_id),
-    )
+    # Обновляем статусное сообщение
+    status_message_id = data.get("status_message_id")
+    if status_message_id:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=status_message_id,
+                text=(
+                    f"📷 Получено: {photo_count} фото, {video_count} видео\n"
+                    "Отправьте ещё фото/видео или нажмите «✅ Подтвердить»."
+                ),
+                reply_markup=_waiting_photos_keyboard(request_id, photo_count, video_count),
+            )
+        except Exception:
+            pass
 
 
 # --- служебные функции ---
 
 
-def _waiting_photos_keyboard(request_id: int):
+def _waiting_photos_keyboard(request_id: int, photo_count: int = 0, video_count: int = 0):
     """Клавиатура во время ожидания фото."""
     builder = InlineKeyboardBuilder()
-    builder.button(
-        text="✅ Подтвердить фото",
-        callback_data=f"eng:inspection:confirm_photos:{request_id}",
-    )
+    total = photo_count + video_count
+    if total > 0:
+        builder.button(
+            text=f"✅ Подтвердить ({total})",
+            callback_data=f"eng:inspection:confirm_photos:{request_id}",
+        )
     builder.button(
         text="🔄 Отправить заново",
         callback_data=f"eng:inspection:restart_photos:{request_id}",
@@ -2015,13 +2118,14 @@ async def engineer_inspection_restart_photos(callback: CallbackQuery, state: FSM
         await state.clear()
         return
     
-    await state.update_data(photos=[], photo_file_ids=[])
-    await callback.message.edit_text(
-        "📷 Жду ваши фотографии.\n"
-        "Отправьте все необходимые фото дефектов. После отправки всех фото нажмите «✅ Подтвердить фото».",
-        reply_markup=_waiting_photos_keyboard(request_id),
+    await state.update_data(photos=[], videos=[], photo_file_ids=[], status_message_id=None)
+    status_msg = await callback.message.edit_text(
+        "🔄 Список очищен. Отправьте фото/видео заново.\n"
+        "Отправьте все необходимые фото/видео подряд, затем подтвердите все сразу.",
+        reply_markup=_waiting_photos_keyboard(request_id, photo_count=0, video_count=0),
     )
-    await callback.answer("Начните отправку фото заново.")
+    await state.update_data(status_message_id=status_msg.message_id)
+    await callback.answer("Начните отправку фото/видео заново.")
 
 
 
