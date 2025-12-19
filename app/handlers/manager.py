@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -474,7 +475,12 @@ async def manager_request_detail(callback: CallbackQuery):
         builder.button(text="🔄 Обновить", callback_data=f"manager:detail:{request.id}")
         builder.adjust(1)
         
-        await callback.message.edit_text(detail_text, reply_markup=builder.as_markup())
+        try:
+            await callback.message.edit_text(detail_text, reply_markup=builder.as_markup())
+        except TelegramBadRequest as e:
+            # Игнорируем ошибку "message is not modified" - это нормально, если данные не изменились
+            if "message is not modified" not in str(e).lower():
+                raise
         await callback.answer()
 
 
