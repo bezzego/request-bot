@@ -1043,6 +1043,12 @@ async def handle_inspection_location(message: Message, state: FSMContext):
         data = await state.get_data()
         specialist_id = data.get("specialist_id")
         
+        # Получаем текущего пользователя для проверки "(я)"
+        current_user = await session.scalar(
+            select(User).where(User.telegram_id == message.from_user.id)
+        )
+        current_user_id = current_user.id if current_user else None
+        
         # Получаем инженеров
         engineers_query = select(User).where(User.role == UserRole.ENGINEER)
         
@@ -1091,7 +1097,7 @@ async def handle_inspection_location(message: Message, state: FSMContext):
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"{user.full_name}{' (я)' if specialist and user.id == specialist.id else ''}",
+                    text=f"{user.full_name}{' (я)' if current_user_id and user.id == current_user_id else ''}",
                     callback_data=f"assign_engineer:{user.id}",
                 )
             ]
@@ -1104,10 +1110,41 @@ async def handle_inspection_location(message: Message, state: FSMContext):
 
 @router.callback_query(StateFilter(NewRequestStates.engineer), F.data.startswith("assign_engineer:"))
 async def handle_engineer_callback(callback: CallbackQuery, state: FSMContext):
-    engineer_id = int(callback.data.split(":")[1])
+    try:
+        engineer_id = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка при выборе инженера. Попробуйте снова.", show_alert=True)
+        return
+    
+    # Проверяем, что выбранный пользователь существует и может быть инженером
+    async with async_session() as session:
+        engineer_user = await session.scalar(
+            select(User)
+            .options(selectinload(User.leader_profile))
+            .where(User.id == engineer_id)
+        )
+        if not engineer_user:
+            await callback.answer("Выбранный пользователь не найден.", show_alert=True)
+            return
+        
+        # Проверяем, что пользователь может быть инженером
+        can_be_engineer = (
+            engineer_user.role == UserRole.ENGINEER
+            or engineer_user.role == UserRole.SPECIALIST
+            or (engineer_user.role == UserRole.MANAGER 
+                and engineer_user.leader_profile 
+                and engineer_user.leader_profile.is_super_admin)
+        )
+        if not can_be_engineer:
+            await callback.answer("Выбранный пользователь не может быть назначен инженером.", show_alert=True)
+            return
+    
     await state.update_data(engineer_id=engineer_id, remedy_term_days=14)
     await state.set_state(NewRequestStates.letter)
-    await callback.message.edit_reply_markup()
+    try:
+        await callback.message.edit_reply_markup()
+    except Exception:
+        pass
     await callback.message.answer(
         "Прикрепите файл обращения (письмо) в формате PDF/документа или отправьте «-», если письма нет.\n"
         "Для отмены напишите «Отмена».",
@@ -1150,43 +1187,75 @@ async def confirm_request(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        engineer_user = await session.scalar(select(User).where(User.id == data["engineer_id"]))
-
-        create_data = RequestCreateData(
-            title=data["title"],
-            description=data["description"],
-            object_name=data["object_name"],
-            address=data["address"],
-            apartment=data.get("apartment"),
-            contact_person=data["contact_person"],
-            contact_phone=data["contact_phone"],
-            contract_number=data.get("contract_number"),
-            defect_type_name=data.get("defect_type"),
-            inspection_datetime=data.get("inspection_datetime"),
-            inspection_location=data.get("inspection_location"),
-            specialist_id=data["specialist_id"],
-            engineer_id=data["engineer_id"],
-            remedy_term_days=data.get("remedy_term_days", 14),
+        engineer_user = await session.scalar(
+            select(User)
+            .options(selectinload(User.leader_profile))
+            .where(User.id == data["engineer_id"])
         )
-        request = await RequestService.create_request(session, create_data)
+        if not engineer_user:
+            await message.answer("Выбранный инженер не найден. Попробуйте снова.")
+            await state.clear()
+            return
 
-        letter_file_id = data.get("letter_file_id")
-        if letter_file_id:
-            session.add(
-                Act(
-                    request_id=request.id,
-                    type=ActType.LETTER,
-                    file_id=letter_file_id,
-                    file_name=data.get("letter_file_name"),
-                    uploaded_by_id=data["specialist_id"],
-                )
+        # Убеждаемся, что у выбранного инженера есть профиль Engineer, если он не является инженером по роли
+        # Это нужно для специалистов и супер-админов, которые могут быть назначены как инженеры
+        from app.infrastructure.db.models.roles.engineer import Engineer
+        
+        # Проверяем, есть ли профиль Engineer
+        if engineer_user.role != UserRole.ENGINEER:
+            engineer_profile = await session.scalar(
+                select(Engineer).where(Engineer.user_id == engineer_user.id)
             )
+            if not engineer_profile:
+                # Создаем профиль Engineer для специалиста или супер-админа
+                engineer_profile = Engineer(user_id=engineer_user.id)
+                session.add(engineer_profile)
+                await session.flush()
 
-        await session.commit()
+        try:
+            create_data = RequestCreateData(
+                title=data["title"],
+                description=data["description"],
+                object_name=data["object_name"],
+                address=data["address"],
+                apartment=data.get("apartment"),
+                contact_person=data["contact_person"],
+                contact_phone=data["contact_phone"],
+                contract_number=data.get("contract_number"),
+                defect_type_name=data.get("defect_type"),
+                inspection_datetime=data.get("inspection_datetime"),
+                inspection_location=data.get("inspection_location"),
+                specialist_id=data["specialist_id"],
+                engineer_id=data["engineer_id"],
+                remedy_term_days=data.get("remedy_term_days", 14),
+            )
+            request = await RequestService.create_request(session, create_data)
 
-        request_label = format_request_label(request)
-        request_title = request.title
-        due_at = request.due_at
+            letter_file_id = data.get("letter_file_id")
+            if letter_file_id:
+                session.add(
+                    Act(
+                        request_id=request.id,
+                        type=ActType.LETTER,
+                        file_id=letter_file_id,
+                        file_name=data.get("letter_file_name"),
+                        uploaded_by_id=data["specialist_id"],
+                    )
+                )
+
+            await session.commit()
+
+            request_label = format_request_label(request)
+            request_title = request.title
+            due_at = request.due_at
+        except Exception as e:
+            await session.rollback()
+            await message.answer(
+                f"❌ Ошибка при создании заявки: {str(e)}\n"
+                "Попробуйте создать заявку заново или обратитесь к администратору."
+            )
+            await state.clear()
+            return
 
     await message.answer(
         f"✅ Заявка {request_label} создана и назначена инженеру.\n"
