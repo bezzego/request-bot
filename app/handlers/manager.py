@@ -440,7 +440,22 @@ async def manager_request_detail(callback: CallbackQuery):
         from app.handlers.specialist import _format_specialist_request_detail
         detail_text = _format_specialist_request_detail(request)
         
+        # Проверяем, является ли суперадмин инженером на этой заявке
+        from app.handlers.engineer import _get_engineer
+        engineer = await _get_engineer(session, callback.from_user.id)
+        is_engineer = engineer and request.engineer_id == engineer.id
+        
         builder = InlineKeyboardBuilder()
+        
+        # Если суперадмин является инженером на этой заявке, показываем кнопки инженера
+        if is_engineer:
+            builder.button(text="🗓 Назначить осмотр", callback_data=f"eng:schedule:{request.id}")
+            builder.button(text="✅ Осмотр выполнен", callback_data=f"eng:inspect:{request.id}")
+            builder.button(text="➕ Плановая позиция", callback_data=f"eng:add_plan:{request.id}")
+            builder.button(text="✏️ Обновить факт", callback_data=f"eng:update_fact:{request.id}")
+            builder.button(text="⏱ Срок устранения", callback_data=f"eng:set_term:{request.id}")
+            builder.button(text="👷 Назначить мастера", callback_data=f"eng:assign_master:{request.id}")
+            builder.button(text="📄 Готово к подписанию", callback_data=f"eng:ready:{request.id}")
         
         # Добавляем кнопки для файлов (писем)
         letter_acts = [act for act in request.acts if act.type == ActType.LETTER]

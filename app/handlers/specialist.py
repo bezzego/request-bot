@@ -325,6 +325,21 @@ async def specialist_request_detail(callback: CallbackQuery):
     detail_text = _format_specialist_request_detail(request)
     builder = InlineKeyboardBuilder()
     
+    # Проверяем, является ли специалист/суперадмин инженером на этой заявке
+    from app.handlers.engineer import _get_engineer
+    engineer = await _get_engineer(session, callback.from_user.id)
+    is_engineer = engineer and request.engineer_id == engineer.id
+    
+    # Если специалист/суперадмин является инженером на этой заявке, показываем кнопки инженера
+    if is_engineer:
+        builder.button(text="🗓 Назначить осмотр", callback_data=f"eng:schedule:{request.id}")
+        builder.button(text="✅ Осмотр выполнен", callback_data=f"eng:inspect:{request.id}")
+        builder.button(text="➕ Плановая позиция", callback_data=f"eng:add_plan:{request.id}")
+        builder.button(text="✏️ Обновить факт", callback_data=f"eng:update_fact:{request.id}")
+        builder.button(text="⏱ Срок устранения", callback_data=f"eng:set_term:{request.id}")
+        builder.button(text="👷 Назначить мастера", callback_data=f"eng:assign_master:{request.id}")
+        builder.button(text="📄 Готово к подписанию", callback_data=f"eng:ready:{request.id}")
+    
     # Добавляем кнопки для файлов (писем)
     letter_acts = [act for act in request.acts if act.type == ActType.LETTER]
     for act in letter_acts:
@@ -1367,13 +1382,12 @@ def _format_specialist_request_detail(request: Request) -> str:
     inspection_done = format_moscow(request.inspection_completed_at) or "нет"
     label = format_request_label(request)
 
-    planned_budget = float(request.planned_budget or 0)
-    actual_budget = float(request.actual_budget or 0)
-    budget_delta = actual_budget - planned_budget
-
     planned_hours = float(request.planned_hours or 0)
     actual_hours = float(request.actual_hours or 0)
     hours_delta = actual_hours - planned_hours
+    
+    # Рассчитываем разбивку стоимостей
+    cost_breakdown = _calculate_cost_breakdown(request.work_items or [])
 
     lines = [
         f"📄 <b>{label}</b>",
@@ -1387,9 +1401,12 @@ def _format_specialist_request_detail(request: Request) -> str:
         f"Адрес: {request.address}",
         f"Контакт: {request.contact_person} · {request.contact_phone}",
         "",
-        f"Плановый бюджет: {_format_currency(planned_budget)} ₽",
-        f"Фактический бюджет: {_format_currency(actual_budget)} ₽",
-        f"Δ Бюджет: {_format_currency(budget_delta)} ₽",
+        f"Плановая стоимость видов работ: {_format_currency(cost_breakdown['planned_work_cost'])} ₽",
+        f"Плановая стоимость материалов: {_format_currency(cost_breakdown['planned_material_cost'])} ₽",
+        f"Плановая общая стоимость: {_format_currency(cost_breakdown['planned_total_cost'])} ₽",
+        f"Фактическая стоимость видов работ: {_format_currency(cost_breakdown['actual_work_cost'])} ₽",
+        f"Фактическая стоимость материалов: {_format_currency(cost_breakdown['actual_material_cost'])} ₽",
+        f"Фактическая общая стоимость: {_format_currency(cost_breakdown['actual_total_cost'])} ₽",
         f"Плановые часы: {_format_hours(planned_hours)}",
         f"Фактические часы: {_format_hours(actual_hours)}",
         f"Δ Часы: {_format_hours(hours_delta)}",
@@ -1454,6 +1471,40 @@ def _format_specialist_request_detail(request: Request) -> str:
     lines.append("")
     lines.append("Поддерживайте актуальные статусы и бюджеты, чтобы команда видела прогресс.")
     return "\n".join(lines)
+
+
+def _calculate_cost_breakdown(work_items) -> dict[str, float]:
+    """Рассчитывает разбивку стоимостей по работам и материалам."""
+    planned_work_cost = 0.0
+    planned_material_cost = 0.0
+    actual_work_cost = 0.0
+    actual_material_cost = 0.0
+    
+    for item in work_items:
+        # Плановая стоимость работ
+        if item.planned_cost is not None:
+            planned_work_cost += float(item.planned_cost)
+        
+        # Плановая стоимость материалов
+        if item.planned_material_cost is not None:
+            planned_material_cost += float(item.planned_material_cost)
+        
+        # Фактическая стоимость работ
+        if item.actual_cost is not None:
+            actual_work_cost += float(item.actual_cost)
+        
+        # Фактическая стоимость материалов
+        if item.actual_material_cost is not None:
+            actual_material_cost += float(item.actual_material_cost)
+    
+    return {
+        "planned_work_cost": planned_work_cost,
+        "planned_material_cost": planned_material_cost,
+        "planned_total_cost": planned_work_cost + planned_material_cost,
+        "actual_work_cost": actual_work_cost,
+        "actual_material_cost": actual_material_cost,
+        "actual_total_cost": actual_work_cost + actual_material_cost,
+    }
 
 
 def _format_currency(value: float | None) -> str:

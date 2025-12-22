@@ -94,21 +94,20 @@ def build_category_keyboard(
         )
 
     if category is not None:
+        # Внутри категории показываем элементы
         for item in catalog.iter_items(category.id):
             builder.button(
                 text=f"{item_emoji} {item.name}",
                 callback_data=f"{prefix}:{role_key}:{request_id}:item:{item.id}",
             )
-    else:
-        # на корне показываем элементы верхнего уровня
-        for root in catalog.get_root_categories():
-            for item in catalog.iter_items(root.id):
-                builder.button(
-                    text=f"{item_emoji} {item.name}",
-                    callback_data=f"{prefix}:{role_key}:{request_id}:item:{item.id}",
-                )
+    # На корневом уровне показываем только категории, не все элементы
+    # Это предотвращает ошибку "reply markup is too long" при большом количестве материалов
 
     if category is None:
+        builder.button(
+            text="✅ Закончить",
+            callback_data=f"{prefix}:{role_key}:{request_id}:finish:root",
+        )
         builder.button(
             text="✖️ Закрыть",
             callback_data=f"{prefix}:{role_key}:{request_id}:close:root",
@@ -118,6 +117,10 @@ def build_category_keyboard(
         builder.button(
             text="⬅️ Назад",
             callback_data=f"{prefix}:{role_key}:{request_id}:back:{parent_id}",
+        )
+        builder.button(
+            text="✅ Закончить",
+            callback_data=f"{prefix}:{role_key}:{request_id}:finish:{category.id}",
         )
         builder.button(
             text="✖️ Закрыть",

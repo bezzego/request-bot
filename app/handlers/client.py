@@ -304,6 +304,9 @@ def _format_request_detail(request: Request) -> str:
     master = request.master.full_name if request.master else "—"
     label = format_request_label(request)
 
+    # Рассчитываем разбивку стоимостей
+    cost_breakdown = _calculate_cost_breakdown(request.work_items or [])
+    
     lines = [
         f"📄 <b>{label}</b>",
         f"Название: {request.title}",
@@ -312,7 +315,12 @@ def _format_request_detail(request: Request) -> str:
         f"Инженер: {engineer}",
         f"Мастер: {master}",
         "",
-        f"Фактический бюджет: {_format_currency(request.actual_budget)} ₽",
+        f"Плановая стоимость видов работ: {_format_currency(cost_breakdown['planned_work_cost'])} ₽",
+        f"Плановая стоимость материалов: {_format_currency(cost_breakdown['planned_material_cost'])} ₽",
+        f"Плановая общая стоимость: {_format_currency(cost_breakdown['planned_total_cost'])} ₽",
+        f"Фактическая стоимость видов работ: {_format_currency(cost_breakdown['actual_work_cost'])} ₽",
+        f"Фактическая стоимость материалов: {_format_currency(cost_breakdown['actual_material_cost'])} ₽",
+        f"Фактическая общая стоимость: {_format_currency(cost_breakdown['actual_total_cost'])} ₽",
     ]
 
     if request.work_items:
@@ -355,6 +363,40 @@ async def _show_request_detail(message: Message, request: Request, *, edit: bool
             await message.answer(text, reply_markup=builder.as_markup())
     except Exception:
         await message.answer(text, reply_markup=builder.as_markup())
+
+
+def _calculate_cost_breakdown(work_items) -> dict[str, float]:
+    """Рассчитывает разбивку стоимостей по работам и материалам."""
+    planned_work_cost = 0.0
+    planned_material_cost = 0.0
+    actual_work_cost = 0.0
+    actual_material_cost = 0.0
+    
+    for item in work_items:
+        # Плановая стоимость работ
+        if item.planned_cost is not None:
+            planned_work_cost += float(item.planned_cost)
+        
+        # Плановая стоимость материалов
+        if item.planned_material_cost is not None:
+            planned_material_cost += float(item.planned_material_cost)
+        
+        # Фактическая стоимость работ
+        if item.actual_cost is not None:
+            actual_work_cost += float(item.actual_cost)
+        
+        # Фактическая стоимость материалов
+        if item.actual_material_cost is not None:
+            actual_material_cost += float(item.actual_material_cost)
+    
+    return {
+        "planned_work_cost": planned_work_cost,
+        "planned_material_cost": planned_material_cost,
+        "planned_total_cost": planned_work_cost + planned_material_cost,
+        "actual_work_cost": actual_work_cost,
+        "actual_material_cost": actual_material_cost,
+        "actual_total_cost": actual_work_cost + actual_material_cost,
+    }
 
 
 def _format_currency(value: float | None) -> str:

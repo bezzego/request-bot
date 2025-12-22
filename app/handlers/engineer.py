@@ -423,11 +423,6 @@ async def engineer_request_detail(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
-    # Проверяем, что пользователь действительно назначен как инженер на эту заявку
-    if request.engineer_id != engineer.id:
-        await callback.answer("Нет доступа к заявке.", show_alert=True)
-        return
-
     # Save the last viewed request id into FSM so subsequent photos (even without
     # captions) can be associated correctly when the user is working with this card.
     await state.update_data(request_id=request.id)
@@ -1057,7 +1052,14 @@ async def engineer_work_catalog_plan(callback: CallbackQuery, state: FSMContext)
             )
             await session.commit()
 
-            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=new_quantity)}"
+            # Обновляем сообщение с количеством, показывая что сохранено
+            work_item = await _get_work_item(session, request.id, catalog_item.name)
+            current_quantity = (
+                float(work_item.planned_quantity)
+                if work_item and work_item.planned_quantity is not None
+                else None
+            )
+            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=current_quantity)}"
             markup = build_quantity_keyboard(
                 catalog_item=catalog_item,
                 role_key="ep",
@@ -1065,9 +1067,7 @@ async def engineer_work_catalog_plan(callback: CallbackQuery, state: FSMContext)
                 new_quantity=new_quantity,
             )
             await _update_catalog_message(callback.message, text, markup)
-            await callback.answer(f"План обновлён: {new_quantity:.2f}")
-
-            await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
+            await callback.answer(f"Сохранено {new_quantity:.2f}")
             return
 
         if action == "manual":
@@ -1093,6 +1093,16 @@ async def engineer_work_catalog_plan(callback: CallbackQuery, state: FSMContext)
                 "Можно использовать десятичные числа, например: 2.5 или 10.75"
             )
             await callback.answer()
+            return
+
+        if action == "finish":
+            # Закрываем меню и отправляем заявку
+            try:
+                await callback.message.delete()
+            except Exception:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
+            await callback.answer("Заявка отправлена.")
             return
 
         if action == "close":
@@ -1269,7 +1279,14 @@ async def engineer_material_catalog_plan(callback: CallbackQuery, state: FSMCont
             )
             await session.commit()
 
-            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=new_quantity, is_material=True)}"
+            # Обновляем сообщение с количеством, показывая что сохранено
+            work_item = await _get_work_item(session, request.id, catalog_item.name)
+            current_quantity = (
+                float(work_item.planned_quantity)
+                if work_item and work_item.planned_quantity is not None
+                else None
+            )
+            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=current_quantity, is_material=True)}"
             markup = build_quantity_keyboard(
                 catalog_item=catalog_item,
                 role_key="epm",
@@ -1278,9 +1295,7 @@ async def engineer_material_catalog_plan(callback: CallbackQuery, state: FSMCont
                 is_material=True,
             )
             await _update_catalog_message(callback.message, text, markup)
-            await callback.answer(f"План обновлён: {new_quantity:.2f}")
-
-            await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
+            await callback.answer(f"Сохранено {new_quantity:.2f}")
             return
 
         if action == "manual":
@@ -1306,6 +1321,16 @@ async def engineer_material_catalog_plan(callback: CallbackQuery, state: FSMCont
                 "Можно использовать десятичные числа, например: 2.5 или 10.75"
             )
             await callback.answer()
+            return
+
+        if action == "finish":
+            # Закрываем меню и отправляем заявку
+            try:
+                await callback.message.delete()
+            except Exception:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
+            await callback.answer("Заявка отправлена.")
             return
 
         if action == "close":
@@ -1453,7 +1478,14 @@ async def engineer_material_catalog_fact(callback: CallbackQuery, state: FSMCont
             )
             await session.commit()
 
-            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=new_quantity, is_material=True)}"
+            # Обновляем сообщение с количеством, показывая что сохранено
+            work_item = await _get_work_item(session, request.id, catalog_item.name)
+            current_quantity = (
+                float(work_item.actual_quantity)
+                if work_item and work_item.actual_quantity is not None
+                else None
+            )
+            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=current_quantity, is_material=True)}"
             markup = build_quantity_keyboard(
                 catalog_item=catalog_item,
                 role_key="em",
@@ -1462,9 +1494,7 @@ async def engineer_material_catalog_fact(callback: CallbackQuery, state: FSMCont
                 is_material=True,
             )
             await _update_catalog_message(callback.message, text, markup)
-            await callback.answer(f"Факт обновлён: {new_quantity:.2f}")
-
-            await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
+            await callback.answer(f"Сохранено {new_quantity:.2f}")
             return
 
         if action == "manual":
@@ -1490,6 +1520,16 @@ async def engineer_material_catalog_fact(callback: CallbackQuery, state: FSMCont
                 "Можно использовать десятичные числа, например: 2.5 или 10.75"
             )
             await callback.answer()
+            return
+
+        if action == "finish":
+            # Закрываем меню и отправляем заявку
+            try:
+                await callback.message.delete()
+            except Exception:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
+            await callback.answer("Заявка отправлена.")
             return
 
         if action == "close":
@@ -1632,7 +1672,14 @@ async def engineer_work_catalog(callback: CallbackQuery, state: FSMContext):
             )
             await session.commit()
 
-            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=new_quantity)}"
+            # Обновляем сообщение с количеством, показывая что сохранено
+            work_item = await _get_work_item(session, request.id, catalog_item.name)
+            current_quantity = (
+                float(work_item.actual_quantity)
+                if work_item and work_item.actual_quantity is not None
+                else None
+            )
+            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=current_quantity)}"
             markup = build_quantity_keyboard(
                 catalog_item=catalog_item,
                 role_key="e",
@@ -1640,9 +1687,7 @@ async def engineer_work_catalog(callback: CallbackQuery, state: FSMContext):
                 new_quantity=new_quantity,
             )
             await _update_catalog_message(callback.message, text, markup)
-            await callback.answer(f"Факт обновлён: {new_quantity:.2f}")
-
-            await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
+            await callback.answer(f"Сохранено {new_quantity:.2f}")
             return
 
         if action == "manual":
@@ -1668,6 +1713,16 @@ async def engineer_work_catalog(callback: CallbackQuery, state: FSMContext):
                 "Можно использовать десятичные числа, например: 2.5 или 10.75"
             )
             await callback.answer()
+            return
+
+        if action == "finish":
+            # Закрываем меню и отправляем заявку
+            try:
+                await callback.message.delete()
+            except Exception:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
+            await callback.answer("Заявка отправлена.")
             return
 
         if action == "close":
@@ -2133,7 +2188,9 @@ async def engineer_inspection_restart_photos(callback: CallbackQuery, state: FSM
 async def _get_engineer(session, telegram_id: int) -> User | None:
     """Получает пользователя, который может быть инженером (ENGINEER, SPECIALIST или MANAGER с is_super_admin)."""
     user = await session.scalar(
-        select(User).where(User.telegram_id == telegram_id)
+        select(User)
+        .options(selectinload(User.leader_profile))
+        .where(User.telegram_id == telegram_id)
     )
     if not user:
         return None
@@ -2142,16 +2199,14 @@ async def _get_engineer(session, telegram_id: int) -> User | None:
     if user.role == UserRole.ENGINEER:
         return user
     
-    # Специалисты и суперадмины могут быть назначены как инженеры
+    # Специалисты могут быть назначены как инженеры
     if user.role == UserRole.SPECIALIST:
         return user
     
-    # Суперадмины (менеджеры с is_super_admin)
+    # Суперадмины (менеджеры с is_super_admin) могут быть назначены как инженеры
     if user.role == UserRole.MANAGER:
-        leader = await session.scalar(
-            select(Leader).where(Leader.user_id == user.id, Leader.is_super_admin == True)
-        )
-        if leader:
+        # Проверяем через загруженный профиль leader_profile
+        if user.leader_profile and user.leader_profile.is_super_admin:
             return user
     
     return None
@@ -2189,6 +2244,8 @@ async def _load_request(session, engineer_id: int, request_id: int) -> Request |
             selectinload(Request.defect_type),
             selectinload(Request.work_items),
             selectinload(Request.master),
+            selectinload(Request.engineer),
+            selectinload(Request.specialist),
             selectinload(Request.photos),
             selectinload(Request.acts),
         )
@@ -2311,23 +2368,32 @@ def _format_request_detail(request: Request) -> str:
     work_end = format_moscow(request.work_completed_at) or "—"
     label = format_request_label(request)
 
-    planned_budget = float(request.planned_budget or 0)
-    actual_budget = float(request.actual_budget or 0)
     planned_hours = float(request.planned_hours or 0)
     actual_hours = float(request.actual_hours or 0)
+    
+    # Рассчитываем разбивку стоимостей
+    cost_breakdown = _calculate_cost_breakdown(request.work_items or [])
 
     lines = [
         f"📄 <b>{label}</b>",
         f"Название: {request.title}",
         f"Статус: {status_title}",
         f"Объект: {object_name}",
+        f"Адрес: {request.address}",
+        f"Квартира: {request.apartment or '—'}",
+        f"Контактное лицо: {request.contact_person}",
+        f"Телефон: {request.contact_phone}",
         f"Мастер: {master}",
         f"Осмотр: {inspection}",
         f"Работы завершены: {work_end}",
         f"Срок устранения: {due_text}",
         "",
-        f"Плановый бюджет: {_format_currency(planned_budget)} ₽",
-        f"Фактический бюджет: {_format_currency(actual_budget)} ₽",
+        f"Плановая стоимость видов работ: {_format_currency(cost_breakdown['planned_work_cost'])} ₽",
+        f"Плановая стоимость материалов: {_format_currency(cost_breakdown['planned_material_cost'])} ₽",
+        f"Плановая общая стоимость: {_format_currency(cost_breakdown['planned_total_cost'])} ₽",
+        f"Фактическая стоимость видов работ: {_format_currency(cost_breakdown['actual_work_cost'])} ₽",
+        f"Фактическая стоимость материалов: {_format_currency(cost_breakdown['actual_material_cost'])} ₽",
+        f"Фактическая общая стоимость: {_format_currency(cost_breakdown['actual_total_cost'])} ₽",
         f"Плановые часы: {_format_hours(planned_hours)}",
         f"Фактические часы: {_format_hours(actual_hours)}",
     ]
@@ -2377,6 +2443,40 @@ def _format_request_detail(request: Request) -> str:
             lines.append("✉️ Письмо специалиста: приложено")
 
     return "\n".join(lines)
+
+
+def _calculate_cost_breakdown(work_items) -> dict[str, float]:
+    """Рассчитывает разбивку стоимостей по работам и материалам."""
+    planned_work_cost = 0.0
+    planned_material_cost = 0.0
+    actual_work_cost = 0.0
+    actual_material_cost = 0.0
+    
+    for item in work_items:
+        # Плановая стоимость работ
+        if item.planned_cost is not None:
+            planned_work_cost += float(item.planned_cost)
+        
+        # Плановая стоимость материалов
+        if item.planned_material_cost is not None:
+            planned_material_cost += float(item.planned_material_cost)
+        
+        # Фактическая стоимость работ
+        if item.actual_cost is not None:
+            actual_work_cost += float(item.actual_cost)
+        
+        # Фактическая стоимость материалов
+        if item.actual_material_cost is not None:
+            actual_material_cost += float(item.actual_material_cost)
+    
+    return {
+        "planned_work_cost": planned_work_cost,
+        "planned_material_cost": planned_material_cost,
+        "planned_total_cost": planned_work_cost + planned_material_cost,
+        "actual_work_cost": actual_work_cost,
+        "actual_material_cost": actual_material_cost,
+        "actual_total_cost": actual_work_cost + actual_material_cost,
+    }
 
 
 def _format_currency(value: float | None) -> str:

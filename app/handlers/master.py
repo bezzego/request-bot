@@ -8,7 +8,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InputMediaPhoto, Message
+from aiogram.types import CallbackQuery, InputMediaPhoto, InputMediaVideo, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
@@ -598,6 +598,47 @@ async def master_update_fact(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("master:edit_materials:"))
+async def master_edit_materials(callback: CallbackQuery):
+    """Открывает каталог материалов для редактирования объёмов."""
+    request_id = int(callback.data.split(":")[2])
+    async with async_session() as session:
+        master = await _get_master(session, callback.from_user.id)
+        if not master:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+
+        request = await _load_request(session, master.id, request_id)
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+
+        header = _catalog_header(request)
+
+    from app.services.material_catalog import get_material_catalog
+    catalog = get_material_catalog()
+    text = f"{header}\n\n{format_category_message(None, is_material=True)}"
+    markup = build_category_keyboard(
+        catalog=catalog,
+        category=None,
+        role_key="mm",
+        request_id=request_id,
+        is_material=True,
+    )
+    await callback.message.answer(text, reply_markup=markup)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("master:close_materials:"))
+async def master_close_materials(callback: CallbackQuery):
+    """Закрывает сообщение со списком материалов."""
+    try:
+        await callback.message.delete()
+    except Exception:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("material:mm:"))
 async def master_material_catalog(callback: CallbackQuery, state: FSMContext):
     """Обработчик каталога материалов для обновления факта мастером."""
@@ -732,12 +773,26 @@ async def master_material_catalog(callback: CallbackQuery, state: FSMContext):
             )
             await session.commit()
 
+            # Перезагружаем заявку для получения актуальных данных
+            await session.refresh(request, ["work_items"])
+
             finish_context = await _load_finish_context(state)
             if finish_context and finish_context.get("request_id") == request_id:
                 finish_context["fact_confirmed"] = True
                 await _save_finish_context(state, finish_context)
 
-            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=new_quantity, is_material=True)}"
+            # Рассчитываем стоимость материала для отображения
+            material_cost = round(catalog_item.price * new_quantity, 2)
+            
+            text = (
+                f"{header}\n\n"
+                f"📦 <b>{catalog_item.name}</b>\n"
+                f"Объём: {new_quantity:.2f} {catalog_item.unit or 'шт'}\n"
+                f"Цена за единицу: {catalog_item.price:,.2f} ₽\n"
+                f"<b>Стоимость: {material_cost:,.2f} ₽</b>\n\n"
+                f"✅ Материал сохранён. Стоимость пересчитана автоматически."
+            ).replace(",", " ")
+            
             markup = build_quantity_keyboard(
                 catalog_item=catalog_item,
                 role_key="mm",
@@ -746,9 +801,9 @@ async def master_material_catalog(callback: CallbackQuery, state: FSMContext):
                 is_material=True,
             )
             await _update_catalog_message(callback.message, text, markup)
-            await callback.answer(f"Сохранено {new_quantity:.2f}")
+            await callback.answer(f"Сохранено {new_quantity:.2f}. Стоимость: {material_cost:,.2f} ₽")
 
-            await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
+            # Обновляем меню завершения в фоне, не закрывая меню каталога
             await _refresh_finish_summary_from_context(callback.bot, state, request_id=request_id)
             return
 
@@ -766,6 +821,7 @@ async def master_material_catalog(callback: CallbackQuery, state: FSMContext):
                 quantity_request_id=request_id,
                 quantity_item_id=item_id,
                 quantity_role_key=role_key,
+                quantity_is_material=True,
             )
             await state.set_state(MasterStates.quantity_input)
             unit = catalog_item.unit or "шт"
@@ -774,6 +830,16 @@ async def master_material_catalog(callback: CallbackQuery, state: FSMContext):
                 "Можно использовать десятичные числа, например: 2.5 или 10.75"
             )
             await callback.answer()
+            return
+
+        if action == "finish":
+            # Закрываем меню и отправляем заявку
+            try:
+                await callback.message.delete()
+            except Exception:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
+            await callback.answer("Заявка отправлена.")
             return
 
         if action == "close":
@@ -803,18 +869,26 @@ async def master_quantity_input(message: Message, state: FSMContext):
     request_id = data.get("quantity_request_id")
     item_id = data.get("quantity_item_id")
     role_key = data.get("quantity_role_key")
+    is_material = data.get("quantity_is_material", True)  # По умолчанию материал для обратной совместимости
     
     if not request_id or not item_id:
         await message.answer("Ошибка. Начните процесс заново.")
         await state.clear()
         return
     
-    from app.services.material_catalog import get_material_catalog
-    catalog = get_material_catalog()
+    # Используем правильный каталог в зависимости от типа
+    if is_material:
+        from app.services.material_catalog import get_material_catalog
+        catalog = get_material_catalog()
+    else:
+        from app.services.work_catalog import get_work_catalog
+        catalog = get_work_catalog()
+    
     catalog_item = catalog.get_item(item_id)
     
     if not catalog_item:
-        await message.answer("Материал не найден в каталоге.")
+        item_type = "материал" if is_material else "работа"
+        await message.answer(f"{item_type.capitalize()} не найден в каталоге.")
         await state.clear()
         return
     
@@ -839,13 +913,13 @@ async def master_quantity_input(message: Message, state: FSMContext):
             else None
         )
         
-        text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=quantity, current_quantity=current_quantity, is_material=True)}"
+        text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=quantity, current_quantity=current_quantity, is_material=is_material)}"
         markup = build_quantity_keyboard(
             catalog_item=catalog_item,
             role_key=role_key,
             request_id=request_id,
             new_quantity=quantity,
-            is_material=True,
+            is_material=is_material,
         )
         await message.answer(text, reply_markup=markup)
         await state.clear()
@@ -960,6 +1034,31 @@ async def master_work_catalog(callback: CallbackQuery, state: FSMContext):
             await callback.answer()
             return
 
+        if action == "manual":
+            if not rest:
+                await callback.answer()
+                return
+            item_id = rest[0]
+            catalog_item = catalog.get_item(item_id)
+            if not catalog_item:
+                await callback.answer("Работа не найдена в каталоге.", show_alert=True)
+                return
+            
+            await state.update_data(
+                quantity_request_id=request_id,
+                quantity_item_id=item_id,
+                quantity_role_key=role_key,
+                quantity_is_material=False,
+            )
+            await state.set_state(MasterStates.quantity_input)
+            unit = catalog_item.unit or "шт"
+            await callback.message.answer(
+                f"Введите количество вручную (единица измерения: {unit}).\n"
+                "Можно использовать десятичные числа, например: 2.5 или 10.75"
+            )
+            await callback.answer()
+            return
+
         if action == "save":
             if len(rest) < 2:
                 await callback.answer()
@@ -980,12 +1079,22 @@ async def master_work_catalog(callback: CallbackQuery, state: FSMContext):
             )
             await session.commit()
 
+            # Перезагружаем заявку для получения актуальных данных о материалах
+            await session.refresh(request, ["work_items"])
+            
             finish_context = await _load_finish_context(state)
             if finish_context and finish_context.get("request_id") == request_id:
                 finish_context["fact_confirmed"] = True
                 await _save_finish_context(state, finish_context)
 
-            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=new_quantity)}"
+            # Обновляем сообщение с количеством, показывая что сохранено
+            work_item = await _get_work_item(session, request.id, catalog_item.name)
+            current_quantity = (
+                float(work_item.actual_quantity)
+                if work_item and work_item.actual_quantity is not None
+                else None
+            )
+            text = f"{header}\n\n{format_quantity_message(catalog_item=catalog_item, new_quantity=new_quantity, current_quantity=current_quantity)}"
             markup = build_quantity_keyboard(
                 catalog_item=catalog_item,
                 role_key="m",
@@ -995,8 +1104,27 @@ async def master_work_catalog(callback: CallbackQuery, state: FSMContext):
             await _update_catalog_message(callback.message, text, markup)
             await callback.answer(f"Сохранено {new_quantity:.2f}")
 
+            # Показываем список автоматически рассчитанных материалов
+            await _show_materials_after_work_save(
+                callback.bot,
+                callback.message.chat.id,
+                request,
+                request_id,
+            )
+
+            # Обновляем меню завершения в фоне, не закрывая меню каталога
+            await _refresh_finish_summary_from_context(callback.bot, state, request_id=request_id)
+            return
+
+        if action == "finish":
+            # Закрываем меню и отправляем заявку
+            try:
+                await callback.message.delete()
+            except Exception:
+                await callback.message.edit_reply_markup(reply_markup=None)
             await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
             await _refresh_finish_summary_from_context(callback.bot, state, request_id=request_id)
+            await callback.answer("Заявка отправлена.")
             return
 
         if action == "close":
@@ -1669,48 +1797,183 @@ async def _send_defect_photos_with_start_button(message: Message, photos: list[P
     builder.adjust(1)
     start_button_markup = builder.as_markup()
 
-    chunk: list[InputMediaPhoto] = []
-    total_photos = len(before_photos)
-    last_chunk_index = (total_photos - 1) // 10  # Индекс последнего чанка (0-based)
+    # Пробуем отправить все файлы как фото, при ошибке разделяем на фото и видео
+    photo_chunk: list[InputMediaPhoto] = []
+    total_items = len(before_photos)
+    last_chunk_index = (total_items - 1) // 10
     current_chunk = 0
-
-    for idx, photo in enumerate(before_photos):
-        caption = photo.caption or ""
-        if not chunk:
-            prefix = "📷 Фото дефектов (до работ)"
-            caption = f"{prefix}\n{caption}".strip() if caption else prefix
-        chunk.append(InputMediaPhoto(media=photo.file_id, caption=caption or None))
-
-        # Если набрали 10 фото или это последнее фото
-        if len(chunk) == 10 or idx == total_photos - 1:
+    
+    # Сначала пробуем отправить все как фото
+    try:
+        for idx, photo in enumerate(before_photos):
+            caption = photo.caption or ""
+            if idx == 0:
+                prefix = "📷 Фото дефектов (до работ)"
+                caption = f"{prefix}\n{caption}".strip() if caption else prefix
+            
+            photo_media = InputMediaPhoto(media=photo.file_id, caption=caption if idx == 0 else photo.caption or None)
+            photo_chunk.append(photo_media)
+            
+            is_last_item = (idx == total_items - 1)
             is_last_chunk = (current_chunk == last_chunk_index)
             
-            if len(chunk) == 1:
-                # Если одно фото в чанке
-                item = chunk[0]
-                if is_last_chunk:
-                    # Если это последний чанк, добавляем кнопку к фото
-                    await message.answer_photo(
-                        item.media,
-                        caption=item.caption,
-                        reply_markup=start_button_markup,
-                    )
+            if len(photo_chunk) == 10 or is_last_item:
+                try:
+                    if len(photo_chunk) == 1:
+                        item = photo_chunk[0]
+                        if is_last_item:
+                            await message.answer_photo(
+                                item.media,
+                                caption=item.caption,
+                                reply_markup=start_button_markup,
+                            )
+                        else:
+                            await message.answer_photo(item.media, caption=item.caption)
+                    else:
+                        if is_last_item:
+                            await message.answer_media_group(photo_chunk)
+                            await message.answer(
+                                "Просмотрите фото дефектов выше.",
+                                reply_markup=start_button_markup,
+                            )
+                        else:
+                            await message.answer_media_group(photo_chunk)
+                    photo_chunk = []
+                    current_chunk += 1
+                except TelegramBadRequest as e:
+                    if "can't use file of type Video as Photo" in str(e) or "Video" in str(e):
+                        # Есть видео в группе, нужно разделить
+                        raise
+                    else:
+                        raise
+    except TelegramBadRequest:
+        # Есть видео, разделяем на фото и видео
+        photo_items: list[Photo] = []
+        video_items: list[Photo] = []
+        test_message_ids: list[int] = []
+        
+        # Определяем тип каждого файла, пробуя отправить
+        for photo in before_photos:
+            try:
+                test_msg = await message.bot.send_photo(
+                    chat_id=message.chat.id,
+                    photo=photo.file_id,
+                )
+                test_message_ids.append(test_msg.message_id)
+                photo_items.append(photo)
+            except TelegramBadRequest as e:
+                if "can't use file of type Video as Photo" in str(e) or "Video" in str(e):
+                    video_items.append(photo)
                 else:
-                    await message.answer_photo(item.media, caption=item.caption)
-            else:
-                # Если несколько фото в чанке
-                if is_last_chunk:
-                    # Если это последний чанк, отправляем медиа-группу, затем кнопку отдельным сообщением
-                    await message.answer_media_group(chunk)
-                    await message.answer(
-                        "Просмотрите фото дефектов выше.",
-                        reply_markup=start_button_markup,
-                    )
+                    # Другая ошибка, пробуем как видео
+                    try:
+                        test_msg = await message.bot.send_video(
+                            chat_id=message.chat.id,
+                            video=photo.file_id,
+                        )
+                        test_message_ids.append(test_msg.message_id)
+                        video_items.append(photo)
+                    except Exception:
+                        pass
+        
+        # Удаляем тестовые сообщения
+        for msg_id in test_message_ids:
+            try:
+                await message.bot.delete_message(
+                    chat_id=message.chat.id,
+                    message_id=msg_id,
+                )
+            except Exception:
+                pass
+    
+    # Отправляем фото группами
+    photo_chunk: list[InputMediaPhoto] = []
+    total_photos = len(photo_items)
+    last_photo_index = (total_photos - 1) // 10 if total_photos > 0 else -1
+    current_photo_chunk = 0
+
+    for idx, photo in enumerate(photo_items):
+        caption = photo.caption or ""
+        if idx == 0:
+            prefix = "📷 Фото дефектов (до работ)"
+            caption = f"{prefix}\n{caption}".strip() if caption else prefix
+        
+        photo_media = InputMediaPhoto(media=photo.file_id, caption=caption if idx == 0 else photo.caption or None)
+        photo_chunk.append(photo_media)
+        
+        is_last_photo = (idx == total_photos - 1)
+        is_last_photo_chunk = (current_photo_chunk == last_photo_index)
+        
+        if len(photo_chunk) == 10 or is_last_photo:
+            try:
+                if len(photo_chunk) == 1:
+                    item = photo_chunk[0]
+                    if is_last_photo:
+                        await message.answer_photo(
+                            item.media,
+                            caption=item.caption,
+                            reply_markup=start_button_markup if is_last_photo and len(video_items) == 0 else None,
+                        )
+                    else:
+                        await message.answer_photo(item.media, caption=item.caption)
                 else:
-                    await message.answer_media_group(chunk)
-            
-            chunk = []
-            current_chunk += 1
+                    if is_last_photo:
+                        await message.answer_media_group(photo_chunk)
+                        if len(video_items) == 0:
+                            await message.answer(
+                                "Просмотрите фото дефектов выше.",
+                                reply_markup=start_button_markup,
+                            )
+                    else:
+                        await message.answer_media_group(photo_chunk)
+                photo_chunk = []
+                current_photo_chunk += 1
+            except Exception:
+                pass
+    
+    # Отправляем видео группами
+    video_chunk: list[InputMediaVideo] = []
+    total_videos = len(video_items)
+    last_video_index = (total_videos - 1) // 10 if total_videos > 0 else -1
+    current_video_chunk = 0
+
+    for idx, photo in enumerate(video_items):
+        caption = photo.caption or ""
+        if idx == 0 and len(photo_items) == 0:
+            prefix = "📷 Видео дефектов (до работ)"
+            caption = f"{prefix}\n{caption}".strip() if caption else prefix
+        
+        video_media = InputMediaVideo(media=photo.file_id, caption=caption if idx == 0 and len(photo_items) == 0 else photo.caption or None)
+        video_chunk.append(video_media)
+        
+        is_last_video = (idx == total_videos - 1)
+        is_last_video_chunk = (current_video_chunk == last_video_index)
+        
+        if len(video_chunk) == 10 or is_last_video:
+            try:
+                if len(video_chunk) == 1:
+                    item = video_chunk[0]
+                    if is_last_video:
+                        await message.answer_video(
+                            item.media,
+                            caption=item.caption,
+                            reply_markup=start_button_markup,
+                        )
+                    else:
+                        await message.answer_video(item.media, caption=item.caption)
+                else:
+                    if is_last_video:
+                        await message.answer_media_group(video_chunk)
+                        await message.answer(
+                            "Просмотрите видео дефектов выше.",
+                            reply_markup=start_button_markup,
+                        )
+                    else:
+                        await message.answer_media_group(video_chunk)
+                video_chunk = []
+                current_video_chunk += 1
+            except Exception:
+                pass
 
 
 async def _send_media_chunk(message: Message, media: list[InputMediaPhoto]) -> None:
@@ -1889,6 +2152,7 @@ def _detail_keyboard(request_id: int, request: Request | None = None) -> InlineK
     builder.button(text="🗓 План выхода", callback_data=f"master:schedule:{request_id}")
     builder.button(text="⏹ Завершить работу", callback_data=f"master:finish:{request_id}")
     builder.button(text="✏️ Обновить факт", callback_data=f"master:update_fact:{request_id}")
+    builder.button(text="📦 Редактировать материалы", callback_data=f"master:edit_materials:{request_id}")
     builder.button(text="⬅️ Назад к списку", callback_data="master:back")
     builder.adjust(1)
     return builder.as_markup()
@@ -2010,11 +2274,12 @@ async def master_schedule_calendar(callback: CallbackQuery, state: FSMContext):
 def _format_request_detail(request: Request) -> str:
     status_title = STATUS_TITLES.get(request.status, request.status.value)
     due_text = format_moscow(request.due_at) or "не задан"
-    planned_budget = float(request.planned_budget or 0)
-    actual_budget = float(request.actual_budget or 0)
     planned_hours = float(request.planned_hours or 0)
     actual_hours = float(request.actual_hours or 0)
     defects_photos = sum(1 for photo in (request.photos or []) if photo.type == PhotoType.BEFORE)
+    
+    # Рассчитываем разбивку стоимостей
+    cost_breakdown = _calculate_cost_breakdown(request.work_items or [])
 
     label = format_request_label(request)
     lines = [
@@ -2024,8 +2289,12 @@ def _format_request_detail(request: Request) -> str:
         f"Срок устранения: {due_text}",
         f"Адрес: {request.address}",
         "",
-        f"Плановый бюджет: {_format_currency(planned_budget)} ₽",
-        f"Фактический бюджет: {_format_currency(actual_budget)} ₽",
+        f"Плановая стоимость видов работ: {_format_currency(cost_breakdown['planned_work_cost'])} ₽",
+        f"Плановая стоимость материалов: {_format_currency(cost_breakdown['planned_material_cost'])} ₽",
+        f"Плановая общая стоимость: {_format_currency(cost_breakdown['planned_total_cost'])} ₽",
+        f"Фактическая стоимость видов работ: {_format_currency(cost_breakdown['actual_work_cost'])} ₽",
+        f"Фактическая стоимость материалов: {_format_currency(cost_breakdown['actual_material_cost'])} ₽",
+        f"Фактическая общая стоимость: {_format_currency(cost_breakdown['actual_total_cost'])} ₽",
         f"Плановые часы: {_format_hours(planned_hours)}",
         f"Фактические часы: {_format_hours(actual_hours)}",
     ]
@@ -2084,6 +2353,40 @@ def _format_request_detail(request: Request) -> str:
     return "\n".join(lines)
 
 
+def _calculate_cost_breakdown(work_items) -> dict[str, float]:
+    """Рассчитывает разбивку стоимостей по работам и материалам."""
+    planned_work_cost = 0.0
+    planned_material_cost = 0.0
+    actual_work_cost = 0.0
+    actual_material_cost = 0.0
+    
+    for item in work_items:
+        # Плановая стоимость работ
+        if item.planned_cost is not None:
+            planned_work_cost += float(item.planned_cost)
+        
+        # Плановая стоимость материалов
+        if item.planned_material_cost is not None:
+            planned_material_cost += float(item.planned_material_cost)
+        
+        # Фактическая стоимость работ
+        if item.actual_cost is not None:
+            actual_work_cost += float(item.actual_cost)
+        
+        # Фактическая стоимость материалов
+        if item.actual_material_cost is not None:
+            actual_material_cost += float(item.actual_material_cost)
+    
+    return {
+        "planned_work_cost": planned_work_cost,
+        "planned_material_cost": planned_material_cost,
+        "planned_total_cost": planned_work_cost + planned_material_cost,
+        "actual_work_cost": actual_work_cost,
+        "actual_material_cost": actual_material_cost,
+        "actual_total_cost": actual_work_cost + actual_material_cost,
+    }
+
+
 def _format_currency(value: float | None) -> str:
     if value is None:
         return "0.00"
@@ -2094,3 +2397,85 @@ def _format_hours(value: float | None) -> str:
     if value is None:
         return "0.0 ч"
     return f"{float(value):.1f} ч"
+
+
+async def _show_materials_after_work_save(
+    bot,
+    chat_id: int,
+    request: Request,
+    request_id: int,
+) -> None:
+    """Показывает мастеру список автоматически рассчитанных материалов после сохранения работы."""
+    from app.services.material_catalog import get_material_catalog
+    
+    # Получаем материалы, которые были автоматически рассчитаны
+    # Материал определяется по наличию actual_material_cost или по категории, содержащей "материал"
+    material_items = [
+        item for item in (request.work_items or [])
+        if (
+            (item.actual_material_cost is not None and item.actual_material_cost > 0)
+            or (item.actual_quantity is not None and item.actual_quantity > 0 
+                and ("материал" in (item.category or "").lower() or item.planned_material_cost is not None))
+        )
+        and item.actual_cost is None  # Исключаем работы (у них actual_cost)
+    ]
+    
+    if not material_items:
+        # Если материалов нет, не показываем сообщение
+        return
+    
+    material_catalog = get_material_catalog()
+    header = _catalog_header(request)
+    
+    lines = [
+        f"{header}",
+        "",
+        "📦 <b>Автоматически рассчитанные материалы:</b>",
+        "",
+    ]
+    
+    total_material_cost = 0.0
+    for item in material_items:
+        quantity = item.actual_quantity or 0.0
+        # Используем actual_material_cost, если есть, иначе рассчитываем из цены каталога
+        cost = item.actual_material_cost
+        if cost is None or cost == 0:
+            # Пытаемся найти материал в каталоге для получения цены
+            catalog_item = material_catalog.find_item_by_name(item.name)
+            if catalog_item and quantity > 0:
+                cost = round(catalog_item.price * quantity, 2)
+            else:
+                cost = 0.0
+        
+        unit = item.unit or "шт"
+        total_material_cost += cost
+        price_per_unit = cost / quantity if quantity > 0 else 0.0
+        lines.append(
+            f"📦 <b>{item.name}</b>\n"
+            f"   Объём: {quantity:.2f} {unit}\n"
+            f"   Цена за единицу: {_format_currency(price_per_unit)} ₽\n"
+            f"   Стоимость: {_format_currency(cost)} ₽"
+        )
+    
+    lines.append("")
+    lines.append(f"<b>Итого по материалам: {_format_currency(total_material_cost)} ₽</b>")
+    lines.append("")
+    lines.append("Вы можете изменить объём каждого материала, нажав кнопку ниже.")
+    
+    text = "\n".join(lines)
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="✏️ Редактировать материалы",
+        callback_data=f"master:edit_materials:{request_id}",
+    )
+    builder.button(
+        text="✖️ Закрыть",
+        callback_data=f"master:close_materials:{request_id}",
+    )
+    builder.adjust(1)
+    
+    try:
+        await bot.send_message(chat_id, text, reply_markup=builder.as_markup())
+    except Exception as exc:
+        logger.warning("Failed to show materials list: %s", exc)
