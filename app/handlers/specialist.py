@@ -6,7 +6,7 @@ from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InputMediaPhoto, InputMediaVideo, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
@@ -17,6 +17,8 @@ from app.infrastructure.db.models import (
     DefectType,
     Leader,
     Object,
+    Photo,
+    PhotoType,
     Request,
     RequestStatus,
     User,
@@ -340,6 +342,10 @@ async def specialist_request_detail(callback: CallbackQuery):
         builder.button(text="👷 Назначить мастера", callback_data=f"eng:assign_master:{request.id}")
         builder.button(text="📄 Готово к подписанию", callback_data=f"eng:ready:{request.id}")
     
+    # Добавляем кнопку просмотра фото
+    if request.photos:
+        builder.button(text="📷 Просмотреть фото", callback_data=f"spec:photos:{request.id}")
+    
     # Добавляем кнопки для файлов (писем)
     letter_acts = [act for act in request.acts if act.type == ActType.LETTER]
     for act in letter_acts:
@@ -373,6 +379,41 @@ async def specialist_request_detail(callback: CallbackQuery):
     
     builder.button(text="⬅️ Назад к списку", callback_data="spec:back")
     builder.button(text="🔄 Обновить", callback_data=f"spec:detail:{request.id}")
+    
+    await callback.message.edit_text(detail_text, reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("spec:photos:"))
+async def specialist_view_photos(callback: CallbackQuery):
+    """Просмотр всех фото заявки для специалиста."""
+    request_id = int(callback.data.split(":")[2])
+    
+    async with async_session() as session:
+        specialist = await _get_specialist(session, callback.from_user.id)
+        if not specialist:
+            await callback.answer("Нет доступа к заявке.", show_alert=True)
+            return
+
+        request = await session.scalar(
+            select(Request)
+            .options(selectinload(Request.photos))
+            .where(Request.id == request_id, Request.specialist_id == specialist.id)
+        )
+        
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+
+        photos = request.photos or []
+
+    if not photos:
+        await callback.answer("Фото не найдены.", show_alert=True)
+        return
+
+    from app.handlers.engineer import _send_all_photos
+    await _send_all_photos(callback.message, photos)
+    await callback.answer()
     builder.adjust(1)
 
     await callback.message.edit_text(detail_text, reply_markup=builder.as_markup())

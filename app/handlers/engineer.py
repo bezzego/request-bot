@@ -9,7 +9,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InputMediaPhoto, InputMediaVideo, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
@@ -2270,7 +2270,7 @@ async def _refresh_request_detail(bot, chat_id: int, engineer_telegram_id: int, 
         await bot.send_message(
             chat_id=chat_id,
             text=_format_request_detail(request),
-            reply_markup=_detail_keyboard(request.id),
+            reply_markup=_detail_keyboard(request.id, request),
         )
     except Exception:
         pass
@@ -2278,7 +2278,7 @@ async def _refresh_request_detail(bot, chat_id: int, engineer_telegram_id: int, 
 
 async def _show_request_detail(message: Message, request: Request, *, edit: bool = False) -> None:
     text = _format_request_detail(request)
-    keyboard = _detail_keyboard(request.id)
+    keyboard = _detail_keyboard(request.id, request)
     try:
         if edit:
             await message.edit_text(text, reply_markup=keyboard)
@@ -2288,7 +2288,7 @@ async def _show_request_detail(message: Message, request: Request, *, edit: bool
         await message.answer(text, reply_markup=keyboard)
 
 
-def _detail_keyboard(request_id: int):
+def _detail_keyboard(request_id: int, request: Request | None = None):
     builder = InlineKeyboardBuilder()
     builder.button(text="🗓 Назначить осмотр", callback_data=f"eng:schedule:{request_id}")
     builder.button(text="✅ Осмотр выполнен", callback_data=f"eng:inspect:{request_id}")
@@ -2297,6 +2297,8 @@ def _detail_keyboard(request_id: int):
     builder.button(text="⏱ Срок устранения", callback_data=f"eng:set_term:{request_id}")
     builder.button(text="👷 Назначить мастера", callback_data=f"eng:assign_master:{request_id}")
     builder.button(text="📄 Готово к подписанию", callback_data=f"eng:ready:{request_id}")
+    if request and request.photos:
+        builder.button(text="📷 Просмотреть фото", callback_data=f"eng:photos:{request_id}")
     builder.button(text="⬅️ Назад к списку", callback_data="eng:back")
     builder.adjust(1)
     return builder.as_markup()
@@ -2357,6 +2359,145 @@ async def engineer_set_remedy_term_value(callback: CallbackQuery):
     await callback.answer("Срок сохранён.")
     await callback.message.answer(f"Срок устранения для заявки {label} установлен: {days} дней.")
     await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
+
+
+@router.callback_query(F.data.startswith("eng:photos:"))
+async def engineer_view_photos(callback: CallbackQuery):
+    """Просмотр всех фото заявки для инженера."""
+    request_id = int(callback.data.split(":")[2])
+    async with async_session() as session:
+        engineer = await _get_engineer(session, callback.from_user.id)
+        if not engineer:
+            await callback.answer("Нет доступа к заявке.", show_alert=True)
+            return
+
+        request = await _load_request(session, engineer.id, request_id)
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+
+        # Загружаем все фото заявки
+        photos = (
+            await session.execute(
+                select(Photo)
+                .where(Photo.request_id == request.id)
+                .order_by(Photo.created_at.asc())
+            )
+        ).scalars().all()
+
+    if not photos:
+        await callback.answer("Фото не найдены.", show_alert=True)
+        return
+
+    await _send_all_photos(callback.message, photos)
+    await callback.answer()
+
+
+async def _send_all_photos(message: Message, photos: list[Photo]) -> None:
+    """Отправка всех фото заявки, разделённых по типам (BEFORE, PROCESS, AFTER)."""
+    if not photos:
+        return
+    
+    # Разделяем фото по типам
+    before_photos = [p for p in photos if p.type == PhotoType.BEFORE]
+    process_photos = [p for p in photos if p.type == PhotoType.PROCESS]
+    after_photos = [p for p in photos if p.type == PhotoType.AFTER]
+    
+    # Отправляем фото по типам
+    if before_photos:
+        await message.answer("📷 <b>Фото дефектов (до работ)</b>")
+        await _send_photos_by_type(message, before_photos)
+    
+    if process_photos:
+        await message.answer("📷 <b>Фото в процессе работ</b>")
+        await _send_photos_by_type(message, process_photos)
+    
+    if after_photos:
+        await message.answer("📷 <b>Фото после работ</b>")
+        await _send_photos_by_type(message, after_photos)
+
+
+async def _send_photos_by_type(message: Message, photos: list[Photo]) -> None:
+    """Отправка фото одного типа, разделяя фото и видео."""
+    if not photos:
+        return
+    
+    # Разделяем на фото и видео
+    photo_items: list[Photo] = []
+    video_items: list[Photo] = []
+    
+    # Определяем тип каждого файла, пробуя отправить
+    for photo in photos:
+        try:
+            # Пробуем отправить как фото
+            test_msg = await message.bot.send_photo(
+                chat_id=message.chat.id,
+                photo=photo.file_id,
+            )
+            photo_items.append(photo)
+            # Удаляем тестовое сообщение
+            try:
+                await message.bot.delete_message(
+                    chat_id=message.chat.id,
+                    message_id=test_msg.message_id,
+                )
+            except Exception:
+                pass
+        except TelegramBadRequest as e:
+            if "can't use file of type Video as Photo" in str(e) or "Video" in str(e):
+                video_items.append(photo)
+            else:
+                # Другая ошибка, пробуем как видео
+                try:
+                    test_msg = await message.bot.send_video(
+                        chat_id=message.chat.id,
+                        video=photo.file_id,
+                    )
+                    video_items.append(photo)
+                    # Удаляем тестовое сообщение
+                    try:
+                        await message.bot.delete_message(
+                            chat_id=message.chat.id,
+                            message_id=test_msg.message_id,
+                        )
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+    
+    # Отправляем фото группами
+    photo_chunk: list[InputMediaPhoto] = []
+    for idx, photo in enumerate(photo_items):
+        caption = photo.caption or None
+        photo_media = InputMediaPhoto(media=photo.file_id, caption=caption)
+        photo_chunk.append(photo_media)
+        
+        if len(photo_chunk) == 10 or idx == len(photo_items) - 1:
+            try:
+                if len(photo_chunk) == 1:
+                    await message.answer_photo(photo_chunk[0].media, caption=photo_chunk[0].caption)
+                else:
+                    await message.answer_media_group(photo_chunk)
+                photo_chunk = []
+            except Exception:
+                pass
+    
+    # Отправляем видео группами
+    video_chunk: list[InputMediaVideo] = []
+    for idx, photo in enumerate(video_items):
+        caption = photo.caption or None
+        video_media = InputMediaVideo(media=photo.file_id, caption=caption)
+        video_chunk.append(video_media)
+        
+        if len(video_chunk) == 10 or idx == len(video_items) - 1:
+            try:
+                if len(video_chunk) == 1:
+                    await message.answer_video(video_chunk[0].media, caption=video_chunk[0].caption)
+                else:
+                    await message.answer_media_group(video_chunk)
+                video_chunk = []
+            except Exception:
+                pass
 
 
 def _format_request_detail(request: Request) -> str:
