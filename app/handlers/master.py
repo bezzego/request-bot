@@ -587,13 +587,13 @@ async def master_update_fact(callback: CallbackQuery):
         header = _catalog_header(request)
 
     catalog = get_work_catalog()
-    text = f"{header}\n\n{format_category_message(None)}"
-    markup = build_category_keyboard(
+    markup, page, total_pages = build_category_keyboard(
         catalog=catalog,
         category=None,
         role_key="m",
         request_id=request_id,
     )
+    text = f"{header}\n\n{format_category_message(None, page=page, total_pages=total_pages)}"
     await callback.message.answer(text, reply_markup=markup)
     await callback.answer()
 
@@ -617,14 +617,14 @@ async def master_edit_materials(callback: CallbackQuery):
 
     from app.services.material_catalog import get_material_catalog
     catalog = get_material_catalog()
-    text = f"{header}\n\n{format_category_message(None, is_material=True)}"
-    markup = build_category_keyboard(
+    markup, page, total_pages = build_category_keyboard(
         catalog=catalog,
         category=None,
         role_key="mm",
         request_id=request_id,
         is_material=True,
     )
+    text = f"{header}\n\n{format_category_message(None, is_material=True, page=page, total_pages=total_pages)}"
     await callback.message.answer(text, reply_markup=markup)
     await callback.answer()
 
@@ -674,21 +674,28 @@ async def master_material_catalog(callback: CallbackQuery, state: FSMContext):
 
         header = _catalog_header(request)
 
-        if action in {"browse", "back"}:
+        if action in {"browse", "back", "page"}:
             target = rest[0] if rest else "root"
+            page = 0
+            if len(rest) > 1:
+                try:
+                    page = int(rest[1])
+                except ValueError:
+                    page = 0
             category = None if target == "root" else catalog.get_category(target)
             if target != "root" and not category:
                 await callback.answer("Категория недоступна.", show_alert=True)
                 return
 
-            text = f"{header}\n\n{format_category_message(category, is_material=True)}"
-            markup = build_category_keyboard(
+            markup, page, total_pages = build_category_keyboard(
                 catalog=catalog,
                 category=category,
                 role_key="mm",
                 request_id=request_id,
                 is_material=True,
+                page=page,
             )
+            text = f"{header}\n\n{format_category_message(category, is_material=True, page=page, total_pages=total_pages)}"
             await _update_catalog_message(callback.message, text, markup)
             await callback.answer()
             return
@@ -698,6 +705,12 @@ async def master_material_catalog(callback: CallbackQuery, state: FSMContext):
                 await callback.answer()
                 return
             item_id = rest[0]
+            page = 0
+            if len(rest) > 1:
+                try:
+                    page = int(rest[1])
+                except ValueError:
+                    page = 0
             catalog_item = catalog.get_item(item_id)
             if not catalog_item:
                 await callback.answer("Материал не найден в каталоге.", show_alert=True)
@@ -718,6 +731,7 @@ async def master_material_catalog(callback: CallbackQuery, state: FSMContext):
                 request_id=request_id,
                 new_quantity=new_quantity,
                 is_material=True,
+                page=page,
             )
             await _update_catalog_message(callback.message, text, markup)
             await callback.answer()
@@ -728,6 +742,12 @@ async def master_material_catalog(callback: CallbackQuery, state: FSMContext):
                 await callback.answer()
                 return
             item_id, quantity_code = rest[:2]
+            page = 0
+            if len(rest) > 2:
+                try:
+                    page = int(rest[2])
+                except ValueError:
+                    page = 0
             catalog_item = catalog.get_item(item_id)
             if not catalog_item:
                 await callback.answer("Материал не найден в каталоге.", show_alert=True)
@@ -748,6 +768,7 @@ async def master_material_catalog(callback: CallbackQuery, state: FSMContext):
                 request_id=request_id,
                 new_quantity=new_quantity,
                 is_material=True,
+                page=page,
             )
             await _update_catalog_message(callback.message, text, markup)
             await callback.answer()
@@ -758,6 +779,12 @@ async def master_material_catalog(callback: CallbackQuery, state: FSMContext):
                 await callback.answer()
                 return
             item_id, quantity_code = rest[:2]
+            page = 0
+            if len(rest) > 2:
+                try:
+                    page = int(rest[2])
+                except ValueError:
+                    page = 0
             catalog_item = catalog.get_item(item_id)
             if not catalog_item:
                 await callback.answer("Материал не найден в каталоге.", show_alert=True)
@@ -799,6 +826,7 @@ async def master_material_catalog(callback: CallbackQuery, state: FSMContext):
                 request_id=request_id,
                 new_quantity=new_quantity,
                 is_material=True,
+                page=page,
             )
             await _update_catalog_message(callback.message, text, markup)
             await callback.answer(f"Сохранено {new_quantity:.2f}. Стоимость: {material_cost:,.2f} ₽")
@@ -812,6 +840,12 @@ async def master_material_catalog(callback: CallbackQuery, state: FSMContext):
                 await callback.answer()
                 return
             item_id = rest[0]
+            page = 0
+            if len(rest) > 1:
+                try:
+                    page = int(rest[1])
+                except ValueError:
+                    page = 0
             catalog_item = catalog.get_item(item_id)
             if not catalog_item:
                 await callback.answer("Материал не найден в каталоге.", show_alert=True)
@@ -822,6 +856,7 @@ async def master_material_catalog(callback: CallbackQuery, state: FSMContext):
                 quantity_item_id=item_id,
                 quantity_role_key=role_key,
                 quantity_is_material=True,
+                quantity_page=page,
             )
             await state.set_state(MasterStates.quantity_input)
             unit = catalog_item.unit or "шт"
@@ -870,6 +905,7 @@ async def master_quantity_input(message: Message, state: FSMContext):
     item_id = data.get("quantity_item_id")
     role_key = data.get("quantity_role_key")
     is_material = data.get("quantity_is_material", True)  # По умолчанию материал для обратной совместимости
+    page = data.get("quantity_page")
     
     if not request_id or not item_id:
         await message.answer("Ошибка. Начните процесс заново.")
@@ -920,6 +956,7 @@ async def master_quantity_input(message: Message, state: FSMContext):
             request_id=request_id,
             new_quantity=quantity,
             is_material=is_material,
+            page=page,
         )
         await message.answer(text, reply_markup=markup)
         await state.clear()
@@ -958,20 +995,27 @@ async def master_work_catalog(callback: CallbackQuery, state: FSMContext):
 
         header = _catalog_header(request)
 
-        if action in {"browse", "back"}:
+        if action in {"browse", "back", "page"}:
             target = rest[0] if rest else "root"
+            page = 0
+            if len(rest) > 1:
+                try:
+                    page = int(rest[1])
+                except ValueError:
+                    page = 0
             category = None if target == "root" else catalog.get_category(target)
             if target != "root" and not category:
                 await callback.answer("Категория недоступна.", show_alert=True)
                 return
 
-            text = f"{header}\n\n{format_category_message(category)}"
-            markup = build_category_keyboard(
+            markup, page, total_pages = build_category_keyboard(
                 catalog=catalog,
                 category=category,
                 role_key="m",
                 request_id=request_id,
+                page=page,
             )
+            text = f"{header}\n\n{format_category_message(category, page=page, total_pages=total_pages)}"
             await _update_catalog_message(callback.message, text, markup)
             await callback.answer()
             return
@@ -981,6 +1025,12 @@ async def master_work_catalog(callback: CallbackQuery, state: FSMContext):
                 await callback.answer()
                 return
             item_id = rest[0]
+            page = 0
+            if len(rest) > 1:
+                try:
+                    page = int(rest[1])
+                except ValueError:
+                    page = 0
             catalog_item = catalog.get_item(item_id)
             if not catalog_item:
                 await callback.answer("Работа не найдена в каталоге.", show_alert=True)
@@ -1000,6 +1050,7 @@ async def master_work_catalog(callback: CallbackQuery, state: FSMContext):
                 role_key="m",
                 request_id=request_id,
                 new_quantity=new_quantity,
+                page=page,
             )
             await _update_catalog_message(callback.message, text, markup)
             await callback.answer()
@@ -1010,6 +1061,12 @@ async def master_work_catalog(callback: CallbackQuery, state: FSMContext):
                 await callback.answer()
                 return
             item_id, quantity_code = rest[:2]
+            page = 0
+            if len(rest) > 2:
+                try:
+                    page = int(rest[2])
+                except ValueError:
+                    page = 0
             catalog_item = catalog.get_item(item_id)
             if not catalog_item:
                 await callback.answer("Работа не найдена в каталоге.", show_alert=True)
@@ -1029,6 +1086,7 @@ async def master_work_catalog(callback: CallbackQuery, state: FSMContext):
                 role_key="m",
                 request_id=request_id,
                 new_quantity=new_quantity,
+                page=page,
             )
             await _update_catalog_message(callback.message, text, markup)
             await callback.answer()
@@ -1039,6 +1097,12 @@ async def master_work_catalog(callback: CallbackQuery, state: FSMContext):
                 await callback.answer()
                 return
             item_id = rest[0]
+            page = 0
+            if len(rest) > 1:
+                try:
+                    page = int(rest[1])
+                except ValueError:
+                    page = 0
             catalog_item = catalog.get_item(item_id)
             if not catalog_item:
                 await callback.answer("Работа не найдена в каталоге.", show_alert=True)
@@ -1049,6 +1113,7 @@ async def master_work_catalog(callback: CallbackQuery, state: FSMContext):
                 quantity_item_id=item_id,
                 quantity_role_key=role_key,
                 quantity_is_material=False,
+                quantity_page=page,
             )
             await state.set_state(MasterStates.quantity_input)
             unit = catalog_item.unit or "шт"
@@ -1064,6 +1129,12 @@ async def master_work_catalog(callback: CallbackQuery, state: FSMContext):
                 await callback.answer()
                 return
             item_id, quantity_code = rest[:2]
+            page = 0
+            if len(rest) > 2:
+                try:
+                    page = int(rest[2])
+                except ValueError:
+                    page = 0
             catalog_item = catalog.get_item(item_id)
             if not catalog_item:
                 await callback.answer("Работа не найдена в каталоге.", show_alert=True)
@@ -1100,6 +1171,7 @@ async def master_work_catalog(callback: CallbackQuery, state: FSMContext):
                 role_key="m",
                 request_id=request_id,
                 new_quantity=new_quantity,
+                page=page,
             )
             await _update_catalog_message(callback.message, text, markup)
             await callback.answer(f"Сохранено {new_quantity:.2f}")

@@ -20,6 +20,7 @@ from sqlalchemy.orm import selectinload
 
 router = Router()
 logger = logging.getLogger(__name__)
+WORKS_PER_PAGE = 8
 
 
 class CatalogSettingsStates(StatesGroup):
@@ -102,6 +103,12 @@ def _get_works_by_group(data: dict[str, Any], group: str | None = None) -> list[
     if group is None:
         return works
     return [w for w in works if w.get("group") == group]
+
+
+def _build_group_view_callback(group_idx: int, page: int | None = None) -> str:
+    if page is None:
+        return f"cat:group_idx:{group_idx}"
+    return f"cat:group_idx:{group_idx}:{page}"
 
 
 async def _check_access(message: Message) -> bool:
@@ -209,7 +216,9 @@ async def catalog_view_groups(callback: CallbackQuery, state: FSMContext):
 async def catalog_view_group_works(callback: CallbackQuery, state: FSMContext):
     """Показывает работы в выбранной группе."""
     try:
-        group_idx = int(callback.data.split(":")[2])
+        parts = callback.data.split(":")
+        group_idx = int(parts[2])
+        page = int(parts[3]) if len(parts) > 3 else 0
     except (ValueError, IndexError):
         await callback.answer("Ошибка: неверный индекс группы", show_alert=True)
         return
@@ -226,38 +235,82 @@ async def catalog_view_group_works(callback: CallbackQuery, state: FSMContext):
     data = _load_catalog_data()
     works = _get_works_by_group(data, group)
     
-    # Сохраняем индекс группы в state для использования в кнопках
-    await state.update_data(viewing_group_idx=group_idx)
+    total_works = len(works)
+    total_pages = max(1, (total_works + WORKS_PER_PAGE - 1) // WORKS_PER_PAGE)
+    page = max(0, min(page, total_pages - 1))
     
-    text = f"📂 <b>Группа: {group}</b>\n\n<b>Работы:</b> ({len(works)})\n\n"
+    # Сохраняем индекс группы и страницу в state для использования в кнопках
+    await state.update_data(viewing_group_idx=group_idx, viewing_group_page=page)
+    
+    text = f"📂 <b>Группа: {group}</b>\n\n<b>Работы:</b> ({total_works})\n"
     
     if not works:
         text += "В этой группе пока нет работ.\n"
     else:
+        text += f"Страница {page + 1}/{total_pages}\n\n"
         kb_builder = InlineKeyboardBuilder()
         
-        for idx, work in enumerate(works, 1):
+        start_idx = page * WORKS_PER_PAGE
+        end_idx = min(start_idx + WORKS_PER_PAGE, total_works)
+        for work_idx in range(start_idx, end_idx):
+            work = works[work_idx]
             name = work.get("name", "Без названия")
             code = work.get("code", "")
             unit = work.get("unit", "")
             price = work.get("price_per_unit", 0)
             materials_count = len(work.get("materials", []))
             
-            text += f"{idx}. <b>{name}</b>\n"
+            text += f"{work_idx + 1}. <b>{name}</b>\n"
             text += f"   Код: {code}\n"
             text += f"   Ед.: {unit} | Цена: {price:.2f} ₽\n"
             text += f"   Материалов: {materials_count}\n\n"
             
             # Используем индекс группы и индекс работы для экономии места в callback_data
-            kb_builder.button(
-                text=f"✏️ {name[:30]}",
-                callback_data=f"cat:edit_work:{group_idx}:{idx-1}"
+            kb_builder.row(
+                InlineKeyboardButton(
+                    text=f"✏️ {name[:30]}",
+                    callback_data=f"cat:edit_work:{group_idx}:{work_idx}",
+                )
             )
         
-        kb_builder.button(text="➕ Добавить работу в группу", callback_data=f"cat:add_work_to_group_idx:{group_idx}")
-        kb_builder.button(text="🗑 Удалить группу", callback_data=f"cat:delete_group:{group_idx}")
-        kb_builder.button(text="⬅️ Назад к группам", callback_data="cat:view_groups")
-        kb_builder.adjust(1)
+        if total_pages > 1:
+            prev_button = None
+            next_button = None
+            if page > 0:
+                prev_button = InlineKeyboardButton(
+                    text="⬅️ Пред.",
+                    callback_data=_build_group_view_callback(group_idx, page - 1),
+                )
+            if page < total_pages - 1:
+                next_button = InlineKeyboardButton(
+                    text="След. ➡️",
+                    callback_data=_build_group_view_callback(group_idx, page + 1),
+                )
+            if prev_button and next_button:
+                kb_builder.row(prev_button, next_button)
+            elif prev_button:
+                kb_builder.row(prev_button)
+            elif next_button:
+                kb_builder.row(next_button)
+        
+        kb_builder.row(
+            InlineKeyboardButton(
+                text="➕ Добавить работу в группу",
+                callback_data=f"cat:add_work_to_group_idx:{group_idx}",
+            )
+        )
+        kb_builder.row(
+            InlineKeyboardButton(
+                text="🗑 Удалить группу",
+                callback_data=f"cat:delete_group:{group_idx}",
+            )
+        )
+        kb_builder.row(
+            InlineKeyboardButton(
+                text="⬅️ Назад к группам",
+                callback_data="cat:view_groups",
+            )
+        )
         
         await callback.message.edit_text(text, reply_markup=kb_builder.as_markup())
         await callback.answer()
@@ -265,10 +318,24 @@ async def catalog_view_group_works(callback: CallbackQuery, state: FSMContext):
     
     # Если группа пустая, показываем только кнопки действий
     kb_builder = InlineKeyboardBuilder()
-    kb_builder.button(text="➕ Добавить работу в группу", callback_data=f"cat:add_work_to_group_idx:{group_idx}")
-    kb_builder.button(text="🗑 Удалить группу", callback_data=f"cat:delete_group:{group_idx}")
-    kb_builder.button(text="⬅️ Назад к группам", callback_data="cat:view_groups")
-    kb_builder.adjust(1)
+    kb_builder.row(
+        InlineKeyboardButton(
+            text="➕ Добавить работу в группу",
+            callback_data=f"cat:add_work_to_group_idx:{group_idx}",
+        )
+    )
+    kb_builder.row(
+        InlineKeyboardButton(
+            text="🗑 Удалить группу",
+            callback_data=f"cat:delete_group:{group_idx}",
+        )
+    )
+    kb_builder.row(
+        InlineKeyboardButton(
+            text="⬅️ Назад к группам",
+            callback_data="cat:view_groups",
+        )
+    )
     
     await callback.message.edit_text(text, reply_markup=kb_builder.as_markup())
     await callback.answer()
@@ -648,7 +715,11 @@ async def catalog_edit_work_start(callback: CallbackQuery, state: FSMContext):
     kb_builder.button(text="➕ Добавить материал", callback_data="cat:add_material")
     kb_builder.button(text="📦 Материалы", callback_data="cat:view_materials")
     kb_builder.button(text="🗑 Удалить работу", callback_data="cat:delete_work")
-    kb_builder.button(text="⬅️ Назад", callback_data=f"cat:group_idx:{group_idx}")
+    view_page = state_data.get("viewing_group_page", 0)
+    kb_builder.button(
+        text="⬅️ Назад",
+        callback_data=_build_group_view_callback(group_idx, view_page),
+    )
     kb_builder.adjust(2, 2, 1, 1, 1, 1)
     
     await callback.message.edit_text(text, reply_markup=kb_builder.as_markup())
@@ -1461,6 +1532,7 @@ async def catalog_delete_confirm_yes(callback: CallbackQuery, state: FSMContext)
         work = data.get("editing_work", {})
         work_code = work.get("code")
         group = data.get("editing_work_group")
+        view_page = data.get("viewing_group_page", 0)
         
         catalog_data = _load_catalog_data()
         all_works = catalog_data.get("works", [])
@@ -1484,7 +1556,7 @@ async def catalog_delete_confirm_yes(callback: CallbackQuery, state: FSMContext)
         
         if group_idx >= 0:
             await state.update_data(groups_list=all_groups)
-            fake_cb_data = f"cat:group_idx:{group_idx}"
+            fake_cb_data = _build_group_view_callback(group_idx, view_page)
             from aiogram.types import CallbackQuery as CB
             class FakeCallback:
                 def __init__(self, msg, data):

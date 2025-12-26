@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Iterable, Protocol
 
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -39,6 +40,7 @@ class Catalog(Protocol):
     def get_item(self, item_id: str) -> CatalogItem | None: ...
 
 QUANTITY_SCALE = 100  # две цифры после запятой
+CATALOG_PAGE_SIZE = 12
 
 
 def encode_quantity(value: float) -> str:
@@ -52,22 +54,40 @@ def decode_quantity(value: str) -> float:
 def format_category_message(
     category: WorkCatalogCategory | MaterialCatalogCategory | None,
     is_material: bool = False,
+    page: int | None = None,
+    total_pages: int | None = None,
 ) -> str:
     if not category:
         catalog_type = "материалов" if is_material else "работ"
         item_type = "материал" if is_material else "работу"
-        return (
+        message = (
             f"📦 <b>Каталог {catalog_type}</b>\n"
             f"Выберите раздел, затем конкретный {item_type}.\n"
             "После выбора объём будет пересчитан автоматически."
         )
+        if page is not None and total_pages and total_pages > 1:
+            message += f"\n\nСтраница {page + 1}/{total_pages}"
+        return message
 
     breadcrumb = " / ".join(category.path)
     item_type = "материал" if is_material else "работу"
-    return (
+    message = (
         f"📂 <b>{breadcrumb}</b>\n"
         f"Выберите {item_type} или откройте вложенный раздел."
     )
+    if page is not None and total_pages and total_pages > 1:
+        message += f"\n\nСтраница {page + 1}/{total_pages}"
+    return message
+
+
+def _paginate_entries(entries: list[tuple[str, CatalogCategory | CatalogItem]], page: int) -> tuple[list[tuple[str, CatalogCategory | CatalogItem]], int, int]:
+    if not entries:
+        return [], 0, 1
+    total_pages = max(1, math.ceil(len(entries) / CATALOG_PAGE_SIZE))
+    page = max(0, min(page, total_pages - 1))
+    start = page * CATALOG_PAGE_SIZE
+    end = start + CATALOG_PAGE_SIZE
+    return entries[start:end], page, total_pages
 
 
 def build_category_keyboard(
@@ -77,7 +97,8 @@ def build_category_keyboard(
     role_key: str,
     request_id: int,
     is_material: bool = False,
-) -> InlineKeyboardMarkup:
+    page: int = 0,
+) -> tuple[InlineKeyboardMarkup, int, int]:
     builder = InlineKeyboardBuilder()
     category_id = category.id if category else None
     subcategories = (
@@ -87,18 +108,37 @@ def build_category_keyboard(
     prefix = "material" if is_material else "work"
     item_emoji = "📦" if is_material else "🛠"
     
+    entries: list[tuple[str, CatalogCategory | CatalogItem]] = []
     for sub in subcategories:
-        builder.button(
-            text=f"📂 {sub.name}",
-            callback_data=f"{prefix}:{role_key}:{request_id}:browse:{sub.id}",
-        )
+        entries.append(("category", sub))
 
     if category is not None:
-        # Внутри категории показываем элементы
         for item in catalog.iter_items(category.id):
+            entries.append(("item", item))
+
+    page_entries, page, total_pages = _paginate_entries(entries, page)
+    for entry_type, entry in page_entries:
+        if entry_type == "category":
             builder.button(
-                text=f"{item_emoji} {item.name}",
-                callback_data=f"{prefix}:{role_key}:{request_id}:item:{item.id}",
+                text=f"📂 {entry.name}",
+                callback_data=f"{prefix}:{role_key}:{request_id}:browse:{entry.id}",
+            )
+        else:
+            builder.button(
+                text=f"{item_emoji} {entry.name}",
+                callback_data=f"{prefix}:{role_key}:{request_id}:item:{entry.id}:{page}",
+            )
+
+    if total_pages > 1:
+        if page > 0:
+            builder.button(
+                text="⬅️ Пред.",
+                callback_data=f"{prefix}:{role_key}:{request_id}:page:{category_id or 'root'}:{page - 1}",
+            )
+        if page < total_pages - 1:
+            builder.button(
+                text="След. ➡️",
+                callback_data=f"{prefix}:{role_key}:{request_id}:page:{category_id or 'root'}:{page + 1}",
             )
     # На корневом уровне показываем только категории, не все элементы
     # Это предотвращает ошибку "reply markup is too long" при большом количестве материалов
@@ -128,7 +168,7 @@ def build_category_keyboard(
         )
 
     builder.adjust(1)
-    return builder.as_markup()
+    return builder.as_markup(), page, total_pages
 
 
 def format_quantity_message(
@@ -168,6 +208,7 @@ def build_quantity_keyboard(
     request_id: int,
     new_quantity: float,
     is_material: bool = False,
+    page: int | None = None,
 ) -> InlineKeyboardMarkup:
     deltas = [-5.0, -1.0, -0.5, -0.1, 0.1, 0.5, 1.0, 5.0]
 
@@ -179,29 +220,29 @@ def build_quantity_keyboard(
     for delta in deltas[:4]:
         builder.button(
             text=f"{delta:+}",
-            callback_data=_quantity_callback(role_key, request_id, catalog_item.id, apply_delta(delta), is_material),
+            callback_data=_quantity_callback(role_key, request_id, catalog_item.id, apply_delta(delta), is_material, page),
         )
     for delta in deltas[4:]:
         builder.button(
             text=f"{delta:+}",
-            callback_data=_quantity_callback(role_key, request_id, catalog_item.id, apply_delta(delta), is_material),
+            callback_data=_quantity_callback(role_key, request_id, catalog_item.id, apply_delta(delta), is_material, page),
         )
     builder.button(
         text="0",
-        callback_data=_quantity_callback(role_key, request_id, catalog_item.id, 0.0, is_material),
+        callback_data=_quantity_callback(role_key, request_id, catalog_item.id, 0.0, is_material, page),
     )
     prefix = "material" if is_material else "work"
     builder.button(
         text="✍️ Ввести вручную",
-        callback_data=f"{prefix}:{role_key}:{request_id}:manual:{catalog_item.id}",
+        callback_data=f"{prefix}:{role_key}:{request_id}:manual:{catalog_item.id}{'' if page is None else f':{page}'}",
     )
     builder.button(
         text="✅ Сохранить",
-        callback_data=f"{prefix}:{role_key}:{request_id}:save:{catalog_item.id}:{encode_quantity(new_quantity)}",
+        callback_data=f"{prefix}:{role_key}:{request_id}:save:{catalog_item.id}:{encode_quantity(new_quantity)}{'' if page is None else f':{page}'}",
     )
     builder.button(
         text="⬅️ Назад",
-        callback_data=f"{prefix}:{role_key}:{request_id}:back:{catalog_item.category_id}",
+        callback_data=f"{prefix}:{role_key}:{request_id}:back:{catalog_item.category_id}{'' if page is None else f':{page}'}",
     )
     builder.button(
         text="✖️ Закрыть",
@@ -211,6 +252,16 @@ def build_quantity_keyboard(
     return builder.as_markup()
 
 
-def _quantity_callback(role_key: str, request_id: int, item_id: str, quantity: float, is_material: bool = False) -> str:
+def _quantity_callback(
+    role_key: str,
+    request_id: int,
+    item_id: str,
+    quantity: float,
+    is_material: bool = False,
+    page: int | None = None,
+) -> str:
     prefix = "material" if is_material else "work"
-    return f"{prefix}:{role_key}:{request_id}:qty:{item_id}:{encode_quantity(quantity)}"
+    base = f"{prefix}:{role_key}:{request_id}:qty:{item_id}:{encode_quantity(quantity)}"
+    if page is None:
+        return base
+    return f"{base}:{page}"

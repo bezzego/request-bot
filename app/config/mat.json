@@ -1265,10 +1265,697 @@
       "unit": "м.кв",
       "price_per_unit": 15.0,
       "materials": []
+    },
+    {
+      "code": "mop_cracks_protective_film",
+      "name": "Укрытие защитной пленкой",
+      "group": "МОП нов расц / Ремонт трещин",
+      "unit": "м.кв",
+      "price_per_unit": 15.0,
+      "materials": []
+    },
+    {
+      "code": "mop_cracks_plaster_dismantling",
+      "name": "Демонтаж штукатурки",
+      "group": "МОП нов расц / Ремонт трещин",
+      "unit": "м.кв",
+      "price_per_unit": 175.0,
+      "materials": []
+    },
+    {
+      "code": "mop_cracks_joint_repair",
+      "name": "Расшивка и заделка трещины стены (грунтовка включена)",
+      "group": "МОП нов расц / Ремонт трещин",
+      "unit": "м.п.",
+      "price_per_unit": 340.0,
+      "materials": []
+    },
+    {
+      "code": "mop_cracks_sealant",
+      "name": "Заделка мелких трещин герметиком",
+      "group": "МОП нов расц / Ремонт трещин",
+      "unit": "м.п.",
+      "price_per_unit": 120.0,
+      "materials": []
+    },
+    {
+      "code": "mop_cracks_decorative_plaster",
+      "name": "Нанесение декоративной штукатурки",
+      "group": "МОП нов расц / Ремонт трещин",
+      "unit": "м.кв",
+      "price_per_unit": 600.0,
+      "materials": []
+    },
+    {
+      "code": "mop_cracks_painting_2_layers",
+      "name": "Улучшенная окраска водно-дисперсионными составами стен/потолка за 2 раза (грунтовка включена)",
+      "group": "МОП нов расц / Ремонт трещин",
+      "unit": "м.кв",
+      "price_per_unit": 180.0,
+      "materials": []
+    },
+    {
+      "code": "mop_cracks_t_profile_installation",
+      "name": "Монтаж т-образного профиля",
+      "group": "МОП нов расц / Ремонт трещин",
+      "unit": "м.п.",
+      "price_per_unit": 80.0,
+      "materials": []
+    },
+    {
+      "code": "mop_floors_tile_dismantling_with_saving",
+      "name": "Демонтаж керамической плитки с сохранением и очисткой плитки и пола",
+      "group": "МОП нов расц / Полы",
+      "unit": "м.кв",
+      "price_per_unit": 1000.0,
+      "materials": []
+    },
+    {
+      "code": "mop_floors_tile_dismantling_no_saving",
+      "name": "Демонтаж плитки без сохранения",
+      "group": "МОП нов расц / Полы",
+      "unit": "м.кв",
+      "price_per_unit": 300.0,
+      "materials": []
+    },
+    {
+      "code": "mop_floors_tile_installation",
+      "name": "Облицовка керамической плиткой",
+      "group": "МОП нов расц / Полы",
+      "unit": "м.кв",
+      "price_per_unit": 1550.0,
+      "materials": []
+    },
+    {
+      "code": "mop_floors_tile_grouting",
+      "name": "Затирка швов плитки",
+      "group": "МОП нов расц / Полы",
+      "unit": "м.кв",
+      "price_per_unit": 300.0,
+      "materials": []
+    },
+    {
+      "code": "mop_floors_joint_cleaning",
+      "name": "Расчистка швов плитки",
+      "group": "МОП нов расц / Полы",
+      "unit": "м.кв",
+      "price_per_unit": 250.0,
+      "materials": []
+    },
+    {
+      "code": "mop_floors_baseboard_dismantling",
+      "name": "Демонтаж плинтуса из керамической плитки",
+      "group": "МОП нов расц / Полы",
+      "unit": "м.п.",
+      "price_per_unit": 200.0,
+      "materials": []
+    },
+    {
+      "code": "mop_floors_baseboard_installation",
+      "name": "Монтаж плинтуса из керамической плитки",
+      "group": "МОП нов расц / Полы",
+      "unit": "м.п.",
+      "price_per_unit": 300.0,
+      "materials": []
+    },
+    {
+      "code": "mop_materials_unloading",
+      "name": "Разгрузка материала",
+      "group": "МОП нов расц",
+      "unit": "час",
+      "price_per_unit": 400.0,
+      "materials": []
+    },
+    {
+      "code": "mop_room_cleaning",
+      "name": "Уборка помещения (клининг)",
+      "group": "МОП нов расц",
+      "unit": "час",
+      "price_per_unit": 400.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_repair_protective_film",
+      "name": "Укрытие защитной пленкой",
+      "group": "Штукатурные работы / Ремонт штукатурки",
+      "unit": "м.кв",
+      "price_per_unit": 15.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_repair_wallpaper_removal",
+      "name": "Расчистка стен от обоев",
+      "group": "Штукатурные работы / Ремонт штукатурки",
+      "unit": "м.кв",
+      "price_per_unit": 175.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_repair_crack_joint",
+      "name": "Расшивка и заделка трещины стены (грунтовка включена)",
+      "group": "Штукатурные работы / Ремонт штукатурки",
+      "unit": "м.п.",
+      "price_per_unit": 340.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_repair_plaster_dismantling",
+      "name": "Отбивка штукатурки",
+      "group": "Штукатурные работы / Ремонт штукатурки",
+      "unit": "м.кв",
+      "price_per_unit": 175.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_repair_wall_plastering_30mm",
+      "name": "Штукатурка стен толщиной слоя до 30 мм (грунтовка учтена)",
+      "group": "Штукатурные работы / Ремонт штукатурки",
+      "unit": "м.кв",
+      "price_per_unit": 500.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_repair_wall_putty_2_layers",
+      "name": "Шпатлевка стен за 2 раза с ошкуриванием поверхности (грунтовка учтена)",
+      "group": "Штукатурные работы / Ремонт штукатурки",
+      "unit": "м.кв",
+      "price_per_unit": 400.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_repair_wallpaper_or_fiberglass",
+      "name": "Поклейка обоев / стеклохолста (грунтовка включена)",
+      "group": "Штукатурные работы / Ремонт штукатурки",
+      "unit": "м.кв",
+      "price_per_unit": 300.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_repair_painting_2_layers",
+      "name": "Улучшенная окраска водно-дисперсионными составами стен/потолка за 2 раза",
+      "group": "Штукатурные работы / Ремонт штукатурки",
+      "unit": "м.кв",
+      "price_per_unit": 180.0,
+      "materials": []
+    },
+
+    {
+      "code": "plaster_floors_laminate_dismantling",
+      "name": "Демонтаж ламината",
+      "group": "Штукатурные работы / Полы",
+      "unit": "м.кв",
+      "price_per_unit": 180.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_floors_laminate_installation",
+      "name": "Укладка ламината (с подложкой)",
+      "group": "Штукатурные работы / Полы",
+      "unit": "м.кв",
+      "price_per_unit": 400.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_floors_architrave_dismantling",
+      "name": "Демонтаж наличников (с сохранением)",
+      "group": "Штукатурные работы / Полы",
+      "unit": "м.п.",
+      "price_per_unit": 50.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_floors_architrave_installation",
+      "name": "Монтаж наличников с герметизацией",
+      "group": "Штукатурные работы / Полы",
+      "unit": "м.п.",
+      "price_per_unit": 125.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_floors_pvc_baseboard_dismantling",
+      "name": "Демонтаж плинтуса ПВХ (с сохранением)",
+      "group": "Штукатурные работы / Полы",
+      "unit": "м.п.",
+      "price_per_unit": 50.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_floors_pvc_baseboard_installation",
+      "name": "Монтаж плинтусов ПВХ",
+      "group": "Штукатурные работы / Полы",
+      "unit": "м.п.",
+      "price_per_unit": 100.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_floors_threshold_dismantling",
+      "name": "Демонтаж дверных порогов",
+      "group": "Штукатурные работы / Полы",
+      "unit": "шт",
+      "price_per_unit": 150.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_floors_threshold_installation",
+      "name": "Монтаж дверных порогов",
+      "group": "Штукатурные работы / Полы",
+      "unit": "шт",
+      "price_per_unit": 200.0,
+      "materials": []
+    },
+
+    {
+      "code": "plaster_related_socket_dismantling",
+      "name": "Демонтаж розеток (с сохранением)",
+      "group": "Штукатурные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 50.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_related_socket_installation",
+      "name": "Монтаж розеток",
+      "group": "Штукатурные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 100.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_related_door_dismantling",
+      "name": "Демонтаж дверей (полный комплект)",
+      "group": "Штукатурные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 1000.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_related_door_installation",
+      "name": "Монтаж дверей (полный комплект)",
+      "group": "Штукатурные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 3000.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_related_hinge_replacement",
+      "name": "Замена дверных петель",
+      "group": "Штукатурные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 250.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_related_lock_repair",
+      "name": "Замена (ремонт) дверного замка/ручки",
+      "group": "Штукатурные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 500.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_related_corner_installation",
+      "name": "Монтаж декоративного уголка",
+      "group": "Штукатурные работы / Сопутствующие работы",
+      "unit": "м.п.",
+      "price_per_unit": 80.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_related_corner_dismantling",
+      "name": "Снятие пластикового уголка",
+      "group": "Штукатурные работы / Сопутствующие работы",
+      "unit": "м.п.",
+      "price_per_unit": 60.0,
+      "materials": []
+    },
+
+    {
+      "code": "plaster_blowing_slopes_dismantling",
+      "name": "Демонтаж откосов (с сохранением)",
+      "group": "Штукатурные работы / Продувание",
+      "unit": "м.п.",
+      "price_per_unit": 170.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_blowing_slopes_installation",
+      "name": "Монтаж откосов с герметизацией и утеплением обрамлением уголков",
+      "group": "Штукатурные работы / Продувание",
+      "unit": "м.п.",
+      "price_per_unit": 230.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_blowing_windowsill_dismantling",
+      "name": "Демонтаж доски подоконной (с сохранением)",
+      "group": "Штукатурные работы / Продувание",
+      "unit": "шт",
+      "price_per_unit": 1000.0,
+      "materials": []
+    },
+    {
+      "code": "plaster_blowing_windowsill_installation",
+      "name": "Монтаж подоконника с герметизацией и утеплением",
+      "group": "Штукатурные работы / Продувание",
+      "unit": "шт",
+      "price_per_unit": 1500.0,
+      "materials": []
+    },
+    {
+      "code": "tile_tile_protective_film",
+      "name": "Укрытие защитной пленкой",
+      "group": "Плиточные работы / Плитка",
+      "unit": "м.кв",
+      "price_per_unit": 15.0,
+      "materials": []
+    },
+    {
+      "code": "tile_tile_dismantling_with_saving",
+      "name": "Демонтаж плитки (с сохранением, расчисткой клея от плитки и основания стены)",
+      "group": "Плиточные работы / Плитка",
+      "unit": "м.кв",
+      "price_per_unit": 1000.0,
+      "materials": []
+    },
+    {
+      "code": "tile_tile_dismantling_no_saving",
+      "name": "Демонтаж плитки (без сохранения)",
+      "group": "Плиточные работы / Плитка",
+      "unit": "м.кв",
+      "price_per_unit": 300.0,
+      "materials": []
+    },
+    {
+      "code": "tile_tile_glue_cleaning",
+      "name": "Очистка стены/пола от клея",
+      "group": "Плиточные работы / Плитка",
+      "unit": "м.кв",
+      "price_per_unit": 450.0,
+      "materials": []
+    },
+    {
+      "code": "tile_wall_cladding_with_priming",
+      "name": "Облицовка стен плиткой (грунтовка учтена)",
+      "group": "Плиточные работы / Плитка",
+      "unit": "м.кв",
+      "price_per_unit": 1550.0,
+      "materials": []
+    },
+    {
+      "code": "tile_joint_cleaning",
+      "name": "Расчистка швов плитки",
+      "group": "Плиточные работы / Плитка",
+      "unit": "м.кв",
+      "price_per_unit": 250.0,
+      "materials": []
+    },
+    {
+      "code": "tile_joint_grouting_with_cleaning",
+      "name": "Затирка швов с очисткой плитки",
+      "group": "Плиточные работы / Плитка",
+      "unit": "м.кв",
+      "price_per_unit": 300.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_architrave_dismantling",
+      "name": "Снятие наличников (с сохранением)",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "м.п.",
+      "price_per_unit": 50.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_architrave_installation",
+      "name": "Установка наличников",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "м.п.",
+      "price_per_unit": 100.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_stretch_ceiling_dismantling",
+      "name": "Демонтаж натяжного потолка (с сохранением)",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "м.кв",
+      "price_per_unit": 400.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_stretch_ceiling_installation",
+      "name": "Монтаж натяжного потолка с кантом",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "м.кв",
+      "price_per_unit": 1150.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_pvc_box_dismantling",
+      "name": "Демонтаж короба ПВХ",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "м.кв",
+      "price_per_unit": 180.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_pvc_box_installation",
+      "name": "Монтаж короба ПВХ",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "м.кв",
+      "price_per_unit": 250.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_bathtub_dismantling",
+      "name": "Демонтаж ванны с отключением канализации (сифона)",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 800.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_bathtub_installation",
+      "name": "Монтаж ванны с подключением канализации (сифона)",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 1400.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_shower_dismantling",
+      "name": "Демонтаж душевой кабины",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 1200.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_shower_installation",
+      "name": "Монтаж душевой кабины",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 1800.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_washbasin_dismantling",
+      "name": "Демонтаж раковины (с отключением сифона, гибкой подводки, герметизация)",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 800.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_washbasin_installation",
+      "name": "Монтаж раковины (с подключением сифона, гибкой подводки, герметизация)",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 1400.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_toilet_dismantling",
+      "name": "Демонтаж унитаза",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 600.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_toilet_installation",
+      "name": "Монтаж унитаза и подключение",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 1100.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_mixer_dismantling",
+      "name": "Демонтаж смесителя (ванна, душевая кабина)",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 200.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_mixer_installation",
+      "name": "Монтаж смесителя (ванна, душевая кабина)",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 500.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_mirror_dismantling",
+      "name": "Демонтаж зеркала",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 150.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_mirror_installation",
+      "name": "Монтаж зеркала",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 250.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_light_dismantling",
+      "name": "Демонтаж светильника",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 220.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_light_installation",
+      "name": "Монтаж светильника",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 200.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_towel_warmer_installation",
+      "name": "Монтаж полотенцесушителя",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 1500.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_socket_dismantling",
+      "name": "Демонтаж розеток (с сохранением)",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 50.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_socket_installation",
+      "name": "Монтаж розеток",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 100.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_threshold_dismantling",
+      "name": "Демонтаж порога",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 50.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_threshold_installation",
+      "name": "Монтаж порога",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 100.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_floor_heating_dismantling",
+      "name": "Демонтаж теплого пола",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "м.кв",
+      "price_per_unit": 450.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_floor_heating_installation",
+      "name": "Монтаж теплого пола",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "м.кв",
+      "price_per_unit": 1000.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_vent_grille_dismantling",
+      "name": "Демонтаж вентиляционной решетки",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 50.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_vent_grille_installation",
+      "name": "Монтаж вентиляционной решетки",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 100.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_fan_dismantling",
+      "name": "Демонтаж вентилятора",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 200.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_fan_installation",
+      "name": "Монтаж вентилятора",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "шт",
+      "price_per_unit": 200.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_pvc_pipe_dismantling",
+      "name": "Демонтаж труб ПВХ",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "м.п.",
+      "price_per_unit": 150.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_pvc_pipe_installation",
+      "name": "Монтаж труб ПВХ",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "м.п.",
+      "price_per_unit": 300.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_materials_unloading",
+      "name": "Разгрузка материала",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "час",
+      "price_per_unit": 400.0,
+      "materials": []
+    },
+    {
+      "code": "tile_related_room_cleaning",
+      "name": "Уборка помещения (клининг)",
+      "group": "Плиточные работы / Сопутствующие работы",
+      "unit": "час",
+      "price_per_unit": 400.0,
+      "materials": []
     }
-  ],
-  "groups": [
-    "Стены",
-    "Плиточные работы"
   ]
 }
