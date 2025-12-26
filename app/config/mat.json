@@ -1,1247 +1,1274 @@
 {
-    "works": [
-      {
-        "code": "door_opening_adjustment",
-        "name": "Корректировка дверного проема",
-        "unit": "шт.",
-        "price_per_unit": 2135.29,
-        "materials": [
-          {
-            "name": "Профиль стоечный Knauf 50х50 мм 3 м 0.60 мм",
-            "unit": "м.п.",
-            "qty_per_work_unit": 3.0,
-            "price_per_unit": 186.67
-          },
-          {
-            "name": "Профиль направляющий Knauf 50х40 мм 3 м 0.60 мм",
-            "unit": "м.п.",
-            "qty_per_work_unit": 3.0,
-            "price_per_unit": 163.53
-          },
-          {
-            "name": "Брусок сухой строганый 50х50х2200 мм сорт Экстра хвойные породы сращенный",
-            "unit": "шт.",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 807.06
-          },
-          {
-            "name": "Лента уплотнительная Knauf Дихтунгсбанд 50х3 мм 30 м самоклеящаяся",
-            "unit": "м",
-            "qty_per_work_unit": 3.0,
-            "price_per_unit": 16.63
-          },
-          {
-            "name": "Гипсокартон Knauf 2700х1200х12.5 мм влагостойкий",
-            "unit": "м.кв",
-            "qty_per_work_unit": 1.07,
-            "price_per_unit": 244.37
-          }
-        ]
-      },
-      {
-        "code": "gkl_boxes_and_structures",
-        "name": "Устройство коробов и конструкций из ГКЛ (зашивка коммуникаций в с/у)",
-        "group": "Перегородки, короба, зашивка стен",
-        "unit": "м.кв.",
-        "price_per_unit": 1977.65,
-        "materials": [
-          {
-            "name": "Гипсокартон Knauf 2700х1200х12.5 мм влагостойкий",
-            "unit": "м.кв",
-            "qty_per_work_unit": 1.12,
-            "price_per_unit": 244.37
-          },
-          {
-            "name": "Профиль потолочный Knauf 60х27 мм  0.60 мм",
-            "unit": "м.п.",
-            "qty_per_work_unit": 4.36,
-            "price_per_unit": 142.75
-          },
-          {
-            "name": "Профиль потолочный направляющий Knauf 27х28 мм  0.60 мм",
-            "unit": "м.п.",
-            "qty_per_work_unit": 3.36,
-            "price_per_unit": 104.31
-          },
-          {
-            "name": "Соединитель одноуровневый краб Knauf 60х27 0.9 мм",
-            "unit": "шт.",
-            "qty_per_work_unit": 2.3,
-            "price_per_unit": 61.18
-          },
-          {
-            "name": "Саморезы ГМ 25x3.5 мм усиленные Hard-Fix",
-            "unit": "шт.",
-            "qty_per_work_unit": 20.14,
-            "price_per_unit": 1.15
-          },
-          {
-            "name": "Саморез с дюбелем",
-            "unit": "шт.",
-            "qty_per_work_unit": 5.46,
-            "price_per_unit": 6.36
-          },
-          {
-            "name": "Саморезы клопы 13x4,2 мм с буром усиленные Hard-Fix/Wenzo",
-            "unit": "шт.",
-            "qty_per_work_unit": 25.0,
-            "price_per_unit": 2.45
-          },
-          {
-            "name": "Лента уплотнительная Knauf Дихтунгсбанд 70х3 мм 30 м самоклеящаяся",
-            "unit": "м.п.",
-            "qty_per_work_unit": 1.35,
-            "price_per_unit": 22.04
-          },
-          {
-            "name": "Подвес прямой 60х27 Knauf 30х302 мм 0.9 мм",
-            "unit": "шт",
-            "qty_per_work_unit": 1.83,
-            "price_per_unit": 35.29
-          },
-          {
-            "name": "Лента бумажная Knauf для швов гипсокартона 50 м",
-            "unit": "м",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 4.28
-          },
-          {
-            "name": "Брусок сухой строганый 50х50х2200 мм сорт Экстра хвойные породы сращенный",
-            "unit": "м",
-            "qty_per_work_unit": 0.2,
-            "price_per_unit": 366.85
-          },
-          {
-            "name": "Шпаклевка гипсовая Knauf Унифлот высокопрочная",
-            "unit": "кг",
-            "qty_per_work_unit": 0.4,
-            "price_per_unit": 126.68
-          }
-        ]
-      },
-      {
-        "code": "revision_hatch_installation",
-        "name": "Установка ревизионных люков пластиковых белых",
-        "group": "Перегородки, короба, зашивка стен",
-        "unit": "шт.",
-        "price_per_unit": 1176.47,
-        "materials": [
-          {
-            "name": "Люк ревизионный пластиковый 317х417 мм врезной",
-            "unit": "шт.",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 512.94
-          }
-        ]
-      },
-      {
-        "code": "aquapanel_wall_cladding_no_insulation",
-        "name": "Облицовка стен листами Аквапанелями на металлическом каркасе без изоляции",
-        "group": "Перегородки, короба, зашивка стен",
-        "unit": "м.кв.",
-        "price_per_unit": 2135.29,
-        "materials": [
-          {
-            "name": "Аквапанель Knauf Наружная 1200х2400х12,5мм",
-            "unit": "м.кв",
-            "qty_per_work_unit": 1.12,
-            "price_per_unit": 1065.77
-          },
-          {
-            "name": "Профиль потолочный Knauf 60х27 мм  0.60 мм",
-            "unit": "м.п.",
-            "qty_per_work_unit": 3.0,
-            "price_per_unit": 142.75
-          },
-          {
-            "name": "Профиль потолочный направляющий Knauf 27х28 мм  0.60 мм",
-            "unit": "м.п.",
-            "qty_per_work_unit": 1.5,
-            "price_per_unit": 104.31
-          },
-          {
-            "name": "Саморезы для аквапанелей 25x4.2 мм SN Knauf",
-            "unit": "шт.",
-            "qty_per_work_unit": 20.14,
-            "price_per_unit": 2.91
-          },
-          {
-            "name": "Саморез с дюбелем",
-            "unit": "шт.",
-            "qty_per_work_unit": 5.46,
-            "price_per_unit": 6.36
-          },
-          {
-            "name": "Саморезы клопы 13x4,2 мм с буром усиленные Hard-Fix/Wenzo",
-            "unit": "шт.",
-            "qty_per_work_unit": 25.0,
-            "price_per_unit": 2.45
-          },
-          {
-            "name": "Лента уплотнительная Knauf Дихтунгсбанд 70х3 мм 30 м самоклеящаяся",
-            "unit": "м.п.",
-            "qty_per_work_unit": 1.35,
-            "price_per_unit": 22.04
-          },
-          {
-            "name": "Подвес прямой 60х27 Knauf 30х302 мм 0.9 мм",
-            "unit": "шт",
-            "qty_per_work_unit": 1.83,
-            "price_per_unit": 35.29
-          }
-        ]
-      },
-      {
-        "code": "loggia_wall_priming",
-        "name": "Грунтовка стен лоджии",
-        "group": "Перегородки, короба, зашивка стен",
-        "unit": "м.кв.",
-        "price_per_unit": 97.65,
-        "materials": [
-          {
-            "name": "Грунт универсальный Мультигрунд Кнауф",
-            "unit": "кг",
-            "qty_per_work_unit": 0.45,
-            "price_per_unit": 345.18
-          }
-        ]
-      },
-      {
-        "code": "aquapanel_single_layer_plaster_10mm",
-        "name": "Однослойная штукатурка Аквапанелей толщина слоя 10 мм",
-        "group": "Перегородки, короба, зашивка стен",
-        "unit": "м.кв.",
-        "price_per_unit": 615.29,
-        "materials": [
-          {
-            "name": "КНАУФ-Севенер",
-            "unit": "кг",
-            "qty_per_work_unit": 10.0,
-            "price_per_unit": 33.08
-          },
-          {
-            "name": "Сетка армирующая Knauf Аквапанель наружная",
-            "unit": "кв.м",
-            "qty_per_work_unit": 1.12,
-            "price_per_unit": 168.52
-          },
-          {
-            "name": "Клей для швов Knauf Аквапанель 310 мл",
-            "unit": "шт",
-            "qty_per_work_unit": 0.4,
-            "price_per_unit": 849.41
-          }
-        ]
-      },
-      {
-        "code": "decorative_plaster_application",
-        "name": "Нанесение декоративной штукатурки",
-        "group": "Перегородки, короба, зашивка стен",
-        "unit": "м.кв.",
-        "price_per_unit": 362.35,
-        "materials": [
-          {
-            "name": "Штукатурка декоративная Ceresit СТ 137 Камешковая 2,5 мм зимняя под покраску 25 кг",
-            "unit": "кг",
-            "qty_per_work_unit": 3.0,
-            "price_per_unit": 50.31
-          }
-        ]
-      },
-      {
-        "code": "loggia_wall_painting_2_layers",
-        "name": "Окраска стен лоджии в 2 слоя",
-        "group": "Перегородки, короба, зашивка стен",
-        "unit": "м.кв.",
-        "price_per_unit": 284.71,
-        "materials": [
-          {
-            "name": "Краска водно-дисперсионная фасадная Текс Профи белая основа А",
-            "unit": "литр",
-            "qty_per_work_unit": 0.3,
-            "price_per_unit": 545.62
-          }
-        ]
-      },
-      {
-        "code": "walls_priming_plitonit",
-        "name": "Грунтовка стен",
-        "group": "Стены",
-        "unit": "м.кв.",
-        "price_per_unit": 102.35,
-        "materials": [
-          {
-            "name": "Грунт PLITONIT упрочняющий",
-            "unit": "литр",
-            "qty_per_work_unit": 0.3,
-            "price_per_unit": 282.12
-          }
-        ]
-      },
-      {
-        "code": "walls_nonabsorbent_priming",
-        "name": "Грунтовка слабовпитывающих и не впитывающих влагу оснований",
-        "group": "Стены",
-        "unit": "м.кв.",
-        "price_per_unit": 102.35,
-        "materials": [
-          {
-            "name": "Бетоконтакт Кнауф",
-            "unit": "литр",
-            "qty_per_work_unit": 0.35,
-            "price_per_unit": 391.76
-          }
-        ]
-      },
-      {
-        "code": "walls_plaster_gypsum_beacons",
-        "name": "Штукатурка стен до 20 мм гипсовыми смесями по маякам",
-        "group": "Стены",
-        "unit": "м.кв.",
-        "price_per_unit": 685.88,
-        "materials": [
-          {
-            "name": "Штукатурка гипсовая Knauf Rotband",
-            "unit": "кг",
-            "qty_per_work_unit": 18.0,
-            "price_per_unit": 22.2
-          },
-          {
-            "name": "Профиль Knauf маячковый 6 мм 3 м 0,60 мм оцинкованный",
-            "unit": "шт.",
-            "qty_per_work_unit": 0.7,
-            "price_per_unit": 327.06
-          }
-        ]
-      },
-      {
-        "code": "walls_plaster_cement_beacons_bath",
-        "name": "Штукатурка стен до 20 мм цементными смесями по маякам в с/у",
-        "group": "Стены",
-        "unit": "м.кв.",
-        "price_per_unit": 763.53,
-        "materials": [
-          {
-            "name": "Штукатурка цементная Волма Аквастарт",
-            "unit": "кг",
-            "qty_per_work_unit": 36.0,
-            "price_per_unit": 16.85
-          },
-          {
-            "name": "Профиль Knauf маячковый 6 мм 3 м 0,60 мм оцинкованный",
-            "unit": "шт.",
-            "qty_per_work_unit": 0.7,
-            "price_per_unit": 327.06
-          },
-          {
-            "name": "Ремонтный состав ХАРДСКРИН RC20",
-            "unit": "кг",
-            "qty_per_work_unit": 0.5,
-            "price_per_unit": 77.65
-          }
-        ]
-      },
-      {
-        "code": "corner_profile_installation",
-        "name": "Установка углозащитного профиля",
-        "group": "Стены",
-        "unit": "шт.",
-        "price_per_unit": 201.18,
-        "materials": [
-          {
-            "name": "Профиль Knauf углозащитный оцинкованный 31х31 мм 3 м 0,60 мм",
-            "unit": "шт.",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 448.24
-          }
-        ]
-      },
-      {
-        "code": "walls_putty",
-        "name": "Шпатлевка стен",
-        "group": "Стены",
-        "unit": "м.кв.",
-        "price_per_unit": 317.65,
-        "materials": [
-          {
-            "name": "Шпаклевка для сухих помещений weber.vetonit LR",
-            "unit": "кг",
-            "qty_per_work_unit": 2.8,
-            "price_per_unit": 46.47
-          }
-        ]
-      },
-      {
-        "code": "wallpapering",
-        "name": "Оклейка стен обоями",
-        "group": "Стены",
-        "unit": "м.кв.",
-        "price_per_unit": 478.82,
-        "materials": [
-          {
-            "name": "Клей Quelyd флизелиновый для обоев",
-            "unit": "кг",
-            "qty_per_work_unit": 0.02,
-            "price_per_unit": 1635.29
-          },
-          {
-            "name": "Обои виниловые Practic Strukturtapeten 3549-25",
-            "unit": "м.кв",
-            "qty_per_work_unit": 1.12,
-            "price_per_unit": 114.02
-          }
-        ]
-      },
-      {
-        "code": "wall_painting",
-        "name": "Окраска стен",
-        "group": "Стены",
-        "unit": "м.кв.",
-        "price_per_unit": 335.29,
-        "materials": [
-          {
-            "name": "Краска водно-дисперсионная Текс Моющаяся Профи",
-            "unit": "литр",
-            "qty_per_work_unit": 0.3,
-            "price_per_unit": 417.91
-          }
-        ]
-      },
-      {
-        "code": "ceramic_tile_wall_cladding",
-        "name": "Облицовка стен керамической плиткой",
-        "group": "Стены",
-        "unit": "м.кв.",
-        "price_per_unit": 1475.29,
-        "materials": [
-          {
-            "name": "Плитка облицовочная Unitile Муза белая 400x250x8 мм",
-            "unit": "м.кв",
-            "qty_per_work_unit": 1.1,
-            "price_per_unit": 1077.65
-          },
-          {
-            "name": "Плитка облицовочная Unitile Муза бежевая 02 400x250x8 мм",
-            "unit": "м.кв",
-            "qty_per_work_unit": 8.0,
-            "price_per_unit": 1123.53
-          },
-          {
-            "name": "Клей для плитки Крепс Усиленный",
-            "unit": "кг",
-            "qty_per_work_unit": 10.0,
-            "price_per_unit": 21.98
-          },
-          {
-            "name": "Затирка Ceresit CE 33 43 багамы",
-            "unit": "кг",
-            "qty_per_work_unit": 0.5,
-            "price_per_unit": 194.12
-          }
-        ]
-      },
-      {
-        "code": "slopes_gkl_cladding",
-        "name": "Облицовка откосов ГКЛ",
-        "group": "Откосы",
-        "unit": "м.п.",
-        "price_per_unit": 757.65,
-        "materials": [
-          {
-            "name": "Гипсокартон Knauf 2700х1200х12.5 мм влагостойкий",
-            "unit": "м.кв",
-            "qty_per_work_unit": 0.28,
-            "price_per_unit": 244.37
-          },
-          {
-            "name": "Пена монтажная Tytan 65 O2 профессиональная 750 мл",
-            "unit": "шт.",
-            "qty_per_work_unit": 0.25,
-            "price_per_unit": 865.88
-          },
-          {
-            "name": "Штукатурка гипсовая Knauf Rotband",
-            "unit": "кг",
-            "qty_per_work_unit": 1.2,
-            "price_per_unit": 22.2
-          }
-        ]
-      },
-      {
-        "code": "slopes_priming",
-        "name": "Грунтовка откосов",
-        "group": "Откосы",
-        "unit": "м.п.",
-        "price_per_unit": 64.71,
-        "materials": [
-          {
-            "name": "Грунт PLITONIT упрочняющий",
-            "unit": "литр",
-            "qty_per_work_unit": 0.08,
-            "price_per_unit": 282.12
-          }
-        ]
-      },
-      {
-        "code": "slopes_putty",
-        "name": "Шпатлевка откосов",
-        "group": "Откосы",
-        "unit": "м.п.",
-        "price_per_unit": 343.53,
-        "materials": [
-          {
-            "name": "Шпатлевка Danogips Superfinish",
-            "unit": "литр",
-            "qty_per_work_unit": 0.5,
-            "price_per_unit": 125.26
-          }
-        ]
-      },
-      {
-        "code": "slopes_wallpapering",
-        "name": "Оклейка откосов флизелином",
-        "group": "Откосы",
-        "unit": "м.п.",
-        "price_per_unit": 452.94,
-        "materials": [
-          {
-            "name": "Клей Quelyd флизелиновый для обоев",
-            "unit": "кг",
-            "qty_per_work_unit": 0.0,
-            "price_per_unit": 1635.29
-          },
-          {
-            "name": "Малярный флизелин Oscar OsF110 (1х25 м) плотность 110 г/кв.м",
-            "unit": "м.кв",
-            "qty_per_work_unit": 0.28,
-            "price_per_unit": 137.22
-          }
-        ]
-      },
-      {
-        "code": "slopes_painting",
-        "name": "Окраска откосов",
-        "group": "Откосы",
-        "unit": "м.п.",
-        "price_per_unit": 232.94,
-        "materials": [
-          {
-            "name": "Краска латексная Текс Профи моющаяся белая основа",
-            "unit": "литр",
-            "qty_per_work_unit": 0.08,
-            "price_per_unit": 526.8
-          }
-        ]
-      },
-      {
-        "code": "slopes_frame_joint_finishing",
-        "name": "Финишная заделка стыка рама-откос по периметру оконного проема",
-        "group": "Откосы",
-        "unit": "м.п.",
-        "price_per_unit": 123.53,
-        "materials": [
-          {
-            "name": "Жидкий пластик Cosmofen 345 белый 305 мл",
-            "unit": "шт",
-            "qty_per_work_unit": 0.1,
-            "price_per_unit": 1037.65
-          }
-        ]
-      },
-      {
-        "code": "pvc_windowsill_installation",
-        "name": "Установка подоконников из ПВХ",
-        "group": "Откосы",
-        "unit": "м.п.",
-        "price_per_unit": 750.59,
-        "materials": [
-          {
-            "name": "Подоконник ПВХ белый 300 мм",
-            "unit": "м.п.",
-            "qty_per_work_unit": 1.1,
-            "price_per_unit": 370.59
-          },
-          {
-            "name": "Пена монтажная Tytan 65 O2 профессиональная 750 мл",
-            "unit": "шт.",
-            "qty_per_work_unit": 0.5,
-            "price_per_unit": 865.88
-          }
-        ]
-      },
-      {
-    "code": "bathroom_floor_waterproofing",
-    "name": "Гидроизоляция пола в с/у с подъемом на стены до 150 мм",
-    "group": "Пол",
-    "unit": "м.кв.",
-    "price_per_unit": 530.59,
-    "materials": [
-      {
-        "name": "Гидроизоляционная мастика KIILTO Fiberpool",
-        "unit": "кг",
-        "qty_per_work_unit": 1.0,
-        "price_per_unit": 1032.61
-      },
-      {
-        "name": "Лента упрочняющая Kiilto 20 см",
-        "unit": "м",
-        "qty_per_work_unit": 15.59,
-        "price_per_unit": 142.73
-      },
-      {
-        "name": "Грунт Kiilto Фиберпул Праймер",
-        "unit": "литр",
-        "qty_per_work_unit": 0.15,
-        "price_per_unit": 1056.47
-      }
-    ]
-  },
-  {
-    "code": "floor_final_leveling",
-    "name": "Финишное выравнивание полов",
-    "group": "Пол",
-    "unit": "м.кв.",
-    "price_per_unit": 530.59,
-    "materials": [
-      {
-        "name": "Ровнитель для пола Основит FK45R Скорлайн",
-        "unit": "кг",
-        "qty_per_work_unit": 10.2,
-        "price_per_unit": 32.76
-      }
-    ]
-  },
-  {
-    "code": "ceramic_tile_floor_installation",
-    "name": "Устройство покрытия пола из керамической плитки",
-    "group": "Пол",
-    "unit": "м.кв.",
-    "price_per_unit": 1469.41,
-    "materials": [
-      {
-        "name": "Конфетти сер КГ 02 400х400 (1-й сорт)",
-        "unit": "м.кв",
-        "qty_per_work_unit": 1.1,
-        "price_per_unit": 1134.12
-      },
-      {
-        "name": "Керамогранит Unitile Техногрес Мираж светло-серый рельеф 300х300х8 мм",
-        "unit": "м.кв",
-        "qty_per_work_unit": 1.1,
-        "price_per_unit": 754.12
-      },
-      {
-        "name": "Клей для плитки Крепс Усиленный",
-        "unit": "кг",
-        "qty_per_work_unit": 10.0,
-        "price_per_unit": 21.98
-      },
-      {
-        "name": "Затирка Ceresit CE 33",
-        "unit": "кг",
-        "qty_per_work_unit": 0.7,
-        "price_per_unit": 138.12
-      }
-    ]
-  },
-  {
-    "code": "laminate_floating_floor_installation",
-    "name": "Устройство покрытия пола из ламината \"плавающий пол\"",
-    "group": "Пол",
-    "unit": "м.кв.",
-    "price_per_unit": 452.94,
-    "materials": [
-      {
-        "name": "Подложка вспененная Стенофон 2 мм 1,05х50 м",
-        "unit": "м.кв",
-        "qty_per_work_unit": 1.2,
-        "price_per_unit": 23.53
-      },
-      {
-        "name": "Ламинат Egger Pro 8/32 Classic 1292x193x8 мм",
-        "unit": "м.кв",
-        "qty_per_work_unit": 1.11,
-        "price_per_unit": 1170.59
-      }
-    ]
-  },
-  {
-    "code": "mdf_baseboard_installation",
-    "name": "Установка плинтуса МДФ",
-    "group": "Пол",
-    "unit": "м.п.",
-    "price_per_unit": 478.82,
-    "materials": [
-      {
-        "name": "Плинтус МДФ VellDoris Экошпон 70х16х2100 (Эмалит белый)",
-        "unit": "м.п.",
-        "qty_per_work_unit": 1.1,
-        "price_per_unit": 304.71
-      },
-      {
-        "name": "Монтажная планка для плинтуса Cosca Décor 2400 мм",
-        "unit": "м.п.",
-        "qty_per_work_unit": 1.1,
-        "price_per_unit": 65.69
-      }
-    ]
-  },
-  {
-    "code": "floor_coverings_joint_installation",
-    "name": "Устройство стыков напольных покрытий",
-    "group": "Пол",
-    "unit": "шт",
-    "price_per_unit": 608.24,
-    "materials": [
-      {
-        "name": "Самоклеящийся порог 42 мм Идеал ПИ30-0,9 Дуб латте 229",
-        "unit": "шт.",
-        "qty_per_work_unit": 4.0,
-        "price_per_unit": 88.24
-      },
-      {
-        "name": "Уголок GAH ALBERTS алюминиевый, серебро 10x10x1х2,6м, 480172",
-        "unit": "шт",
-        "qty_per_work_unit": 1.0,
-        "price_per_unit": 317.65
-      }
-    ]
-  },
-  {
-    "code": "loggia_floor_insulation",
-    "name": "Укладка теплоизоляции на пол лоджии",
-    "group": "Пол",
-    "unit": "м.кв.",
-    "price_per_unit": 452.94,
-    "materials": [
-      {
-        "name": "Утеплитель ROCKWOOL Флор Баттс 1000х600х50 мм",
-        "unit": "м.кв",
-        "qty_per_work_unit": 1.03,
-        "price_per_unit": 886.77
-      },
-      {
-        "name": "Ветро-влагозащита для кровли/стен Изоспан AQ Proff 188",
-        "unit": "м.кв",
-        "qty_per_work_unit": 1.3,
-        "price_per_unit": 174.12
-      },
-      {
-        "name": "Пена монтажная Tytan 65 O2 профессиональная 750 мл",
-        "unit": "шт.",
-        "qty_per_work_unit": 0.5,
-        "price_per_unit": 865.88
-      }
-    ]
-  },
-  {
-    "code": "loggia_floor_screed_upto_40mm",
-    "name": "Устройство стяжки пола, толщина слоя до 40 мм на лоджии",
-    "group": "Пол",
-    "unit": "м.кв.",
-    "price_per_unit": 680.0,
-    "materials": [
-      {
-        "name": "ЦПС М300",
-        "unit": "кг",
-        "qty_per_work_unit": 110.0,
-        "price_per_unit": 10.78
-      },
-      {
-        "name": "Сетка кладочная 50х50 мм d3,5-3,8 мм 0,51х2 м",
-        "unit": "м.кв",
-        "qty_per_work_unit": 1.2,
-        "price_per_unit": 448.67
-      },
-      {
-        "name": "Пленка армированная 200 г/кв.м",
-        "unit": "м.кв",
-        "qty_per_work_unit": 1.2,
-        "price_per_unit": 99.41
-      },
-      {
-        "name": "Лента кромочная демпферная Knauf FE для пола 100х8 мм",
-        "unit": "м.п.",
-        "qty_per_work_unit": 9.6,
-        "price_per_unit": 40.76
-      }
-    ]
-  },
-  {
-    "code": "ceiling_priming_dust_removal",
-    "name": "Грунтовка потолка под натяжные, реечные потолки (обеспыливание)",
-    "group": "Потолок",
-    "unit": "м.кв.",
-    "price_per_unit": 108.24,
-    "materials": [
-      {
-        "name": "Грунт PLITONIT упрочняющий",
-        "unit": "литр",
-        "qty_per_work_unit": 0.2,
-        "price_per_unit": 282.12
-      }
-    ]
-  },
-  {
-    "code": "ceiling_priming_for_plaster",
-    "name": "Грунтовка потолка под штукатурку",
-    "group": "Потолок",
-    "unit": "м.кв.",
-    "price_per_unit": 108.24,
-    "materials": [
-      {
-        "name": "Бетоконтакт Кнауф",
-        "unit": "литр",
-        "qty_per_work_unit": 0.35,
-        "price_per_unit": 391.76
-      }
-    ]
-  },
-  {
-    "code": "ceiling_layered_priming",
-    "name": "Грунтовка потолков послойная",
-    "group": "Потолок",
-    "unit": "м.кв.",
-    "price_per_unit": 108.24,
-    "materials": [
-      {
-        "name": "Грунт PLITONIT упрочняющий",
-        "unit": "литр",
-        "qty_per_work_unit": 0.3,
-        "price_per_unit": 282.12
-      }
-    ]
-  },
-  {
-    "code": "ceiling_putty",
-    "name": "Шпатлевка потолка",
-    "group": "Потолок",
-    "unit": "м.кв.",
-    "price_per_unit": 408.24,
-    "materials": [
-      {
-        "name": "Шпаклевка для сухих помещений weber.vetonit LR",
-        "unit": "кг",
-        "qty_per_work_unit": 2.8,
-        "price_per_unit": 46.47
-      }
-    ]
-  },
-  {
-    "code": "ceiling_painting_2_layers",
-    "name": "Окраска потолка в 2 слоя",
-    "group": "Потолок",
-    "unit": "м.кв.",
-    "price_per_unit": 364.71,
-    "materials": [
-      {
-        "name": "Краска латексная Текс Профи моющаяся белая основа",
-        "unit": "литр",
-        "qty_per_work_unit": 0.3,
-        "price_per_unit": 526.8
-      }
-    ]
-  },
-      {
-        "code": "stretch_ceiling_installation",
-        "name": "Устройство натяжных потолков",
-        "group": "Потолок",
-        "unit": "м.кв.",
-        "price_per_unit": 635.29,
-        "materials": [
-          {
-            "name": "Потолок натяжной в комплекте",
-            "unit": "м.кв",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 1176.47
-          }
-        ]
-      },
-      {
-        "code": "plumbing_collector_distribution",
-        "name": "Коллекторная разводка ГВС, ХВС и канализации от стояков (унитаз2, раковина2, мойка, СМ, ванна)",
-        "group": "Сантехника",
-        "unit": "точка",
-        "price_per_unit": 7927.06,
-        "materials": [
-          {
-            "name": "Трубы, фитинги, фасонные части и т.п.",
-            "unit": "точка",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 8894.12
-          }
-        ]
-      },
-      {
-        "code": "toilet_installation",
-        "name": "Установка унитаза с бачком непосредственно присоединенном",
-        "group": "Сантехника",
-        "unit": "шт.",
-        "price_per_unit": 3882.35,
-        "materials": [
-          {
-            "name": "Унитаз Cersanit Parva Clean On 011 3/6 DPL EO",
-            "unit": "шт.",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 13647.06
-          },
-          {
-            "name": "Гофра AlcaPlast A97",
-            "unit": "шт.",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 1376.47
-          }
-        ]
-      },
-      {
-        "code": "bathtub_installation",
-        "name": "Установка ванны без гидромассажа",
-        "group": "Сантехника",
-        "unit": "шт.",
-        "price_per_unit": 5188.24,
-        "materials": [
-          {
-            "name": "Акриловая ванна Cersanit Build 170x70",
-            "unit": "шт.",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 31988.25
-          },
-          {
-            "name": "Панель фронтальная для ванны акриловой CERSANIT 170 см универсальная",
-            "unit": "шт.",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 7363.53
-          },
-          {
-            "name": "Сифон для ванны Cersanit ZP-SY1000004",
-            "unit": "шт.",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 2341.18
-          }
-        ]
-      },
-      {
-        "code": "washbasin_cabinet_installation",
-        "name": "Установка тумбы под раковину",
-        "group": "Сантехника",
-        "unit": "шт.",
-        "price_per_unit": 3105.88,
-        "materials": [
-          {
-            "name": "Тумба под раковину CERSANIT Colour 600 мм подвесная",
-            "unit": "шт.",
-            "qty_per_work_unit": 2.5,
-            "price_per_unit": 14116.48
-          },
-          {
-            "name": "Тумба под раковину Cersanit Moduo 40 подвесная",
-            "unit": "шт.",
-            "qty_per_work_unit": 4.5,
-            "price_per_unit": 13516.48
-          }
-        ]
-      },
-      {
-        "code": "washbasin_installation",
-        "name": "Установка раковины",
-        "group": "Сантехника",
-        "unit": "шт.",
-        "price_per_unit": 3105.88,
-        "materials": [
-          {
-            "name": "Раковина для тумбы CERSANIT Como 600 мм",
-            "unit": "шт.",
-            "qty_per_work_unit": 6.5,
-            "price_per_unit": 5056.47
-          },
-          {
-            "name": "Раковина Cersanit Moduo 40",
-            "unit": "шт.",
-            "qty_per_work_unit": 8.5,
-            "price_per_unit": 4857.65
-          },
-          {
-            "name": "Сифон для раковины WIRQUIN 30718050",
-            "unit": "шт.",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 404.71
-          }
-        ]
-      },
-      {
-        "code": "mirror_cabinet_installation",
-        "name": "Установка шкафчика/зеркала над раковиной",
-        "group": "Сантехника",
-        "unit": "шт.",
-        "price_per_unit": 3105.88,
-        "materials": [
-          {
-            "name": "Зеркало с полочкой Evoform ATTRACTIVE BY 0506 60x80 см",
-            "unit": "шт.",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 2767.06
-          }
-        ]
-      },
-      {
-        "code": "mixer_installation_surface",
-        "name": "Установка смесителей наружного монтажа",
-        "group": "Сантехника",
-        "unit": "шт.",
-        "price_per_unit": 2588.24,
-        "materials": [
-          {
-            "name": "Смеситель Cersanit Cari 63025 для раковины",
-            "unit": "шт.",
-            "qty_per_work_unit": 10.67,
-            "price_per_unit": 8105.89
-          },
-          {
-            "name": "Смеситель Elghansa Scarlett 1612225-BR01 для раковины с гигиеническим душем",
-            "unit": "шт.",
-            "qty_per_work_unit": 12.33,
-            "price_per_unit": 13.0
-          },
-          {
-            "name": "СМЕСИТЕЛЬ CARI ДЛЯ ВАННЫ",
-            "unit": "шт.",
-            "qty_per_work_unit": 16.33,
-            "price_per_unit": 7400.0
-          }
-        ]
-      },
-      {
-        "code": "shower_system_installation",
-        "name": "Установка душевой системы",
-        "group": "Сантехника",
-        "unit": "шт.",
-        "price_per_unit": 3882.35,
-        "materials": [
-          {
-            "name": "Душевой гарнитур Cersanit Vibe 63067 хром",
-            "unit": "шт.",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 4694.12
-          }
-        ]
-      },
-      {
-        "code": "radiator_reinstallation",
-        "name": "Демонтаж-монтаж радиаторов отопления без изменения конфигурации и точек подключения",
-        "group": "Сантехника",
-        "unit": "шт.",
-        "price_per_unit": 6241.18,
-        "materials": []
-      },
-      {
-        "code": "electrical_devices_dismantling",
-        "name": "Демонтаж существующих электроустановочных изделий",
-        "group": "Электрика",
-        "unit": "комп.",
-        "price_per_unit": 6017.65,
-        "materials": []
-      },
-      {
-        "code": "electrical_boxes_installation_new",
-        "name": "Установка коробок под электроустановочные изделия с устройством отверстий",
-        "group": "Электрика",
-        "unit": "шт.",
-        "price_per_unit": 530.59,
-        "materials": [
-          {
-            "name": "Коробки установочные",
-            "unit": "шт.",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 48.8
-          }
-        ]
-      },
-      {
-        "code": "electrical_boxes_replacement",
-        "name": "Замена коробок под электроустановочные изделия",
-        "group": "Электрика",
-        "unit": "шт.",
-        "price_per_unit": 258.82,
-        "materials": [
-          {
-            "name": "Коробки установочные",
-            "unit": "шт.",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 48.8
-          }
-        ]
-      },
-      {
-        "code": "grooving_in_concrete",
-        "name": "Пробивка штроб в бетонных конструкциях",
-        "group": "Электрика",
-        "unit": "м.п.",
-        "price_per_unit": 569.41,
-        "materials": []
-      },
-      {
-        "code": "grooving_in_masonry",
-        "name": "Пробивка штроб в каменных конструкциях и (или) в штукатурном слое",
-        "group": "Электрика",
-        "unit": "м.п.",
-        "price_per_unit": 478.82,
-        "materials": []
-      },
-      {
-        "code": "cable_laying_with_junction_boxes",
-        "name": "Прокладка кабеля с установкой ответвит. коробок",
-        "group": "Электрика",
-        "unit": "м.п.",
-        "price_per_unit": 249.41,
-        "materials": [
-          {
-            "name": "Кабель типа ВВГнг LS 3х2,5; 3х1,5",
-            "unit": "м.п.",
-            "qty_per_work_unit": 1.2,
-            "price_per_unit": 84.33
-          },
-          {
-            "name": "Гофра электротехническая",
-            "unit": "м.п.",
-            "qty_per_work_unit": 0.7,
-            "price_per_unit": 13.18
-          },
-          {
-            "name": "Коробки распаячные",
-            "unit": "шт.",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 96.47
-          },
-          {
-            "name": "SAT-703, витая пара",
-            "unit": "м.п.",
-            "qty_per_work_unit": 0.0,
-            "price_per_unit": 57.48
-          },
-          {
-            "name": "Антенный делитель",
-            "unit": "шт.",
-            "qty_per_work_unit": 0.0,
-            "price_per_unit": 600.0
-          }
-        ]
-      },
-      {
-        "code": "electrical_devices_installation",
-        "name": "Монтаж электроустановочных изделий",
-        "group": "Электрика",
-        "unit": "шт.",
-        "price_per_unit": 409.41,
-        "materials": [
-          {
-            "name": "Розетка Schneider Electric Atlas Design ATN000143 скрытая установка белая с заземлением с рамкой",
-            "unit": "шт.",
-            "qty_per_work_unit": 10.0,
-            "price_per_unit": 295.29
-          },
-          {
-            "name": "Розетка Schneider Electric Atlas Design ATN440146 скрытая установка белая с заземлением IP44 со шторками с крышкой",
-            "unit": "шт",
-            "qty_per_work_unit": 2.0,
-            "price_per_unit": 420.0
-          },
-          {
-            "name": "Выключатель Schneider Electric Atlas Design ATN000151 двухклавишный скрытая установка белый с рамкой",
-            "unit": "шт",
-            "qty_per_work_unit": 4.0,
-            "price_per_unit": 330.59
-          }
-        ]
-      },
-      {
-        "code": "electric_towel_warmer_installation",
-        "name": "Установка электрического полотенцесушителя",
-        "group": "Электрика",
-        "unit": "шт.",
-        "price_per_unit": 3882.35,
-        "materials": [
-          {
-            "name": "Полотенцесушитель электрический Indigo Line Electro LСLE60-50HL/R",
-            "unit": "шт.",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 8391.77
-          }
-        ]
-      },
-      {
-        "code": "light_fixture_installation",
-        "name": "Установка светильника",
-        "group": "Электрика",
-        "unit": "шт.",
-        "price_per_unit": 1423.53,
-        "materials": [
-          {
-            "name": "Светильник SVET НБП 01-60-033 со стеклом , белый SV0102-0009",
-            "unit": "шт.",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 443.53
-          }
-        ]
-      },
-      {
-        "code": "door_blocks_installation",
-        "name": "Установка дверных блоков",
-        "group": "Дверные блоки",
-        "unit": "шт.",
-        "price_per_unit": 3529.41,
-        "materials": [
-          {
-            "name": "Velldoris Classico 3 2P Экошпон, царговая, глухая без притвора, белый эмалит",
-            "unit": "шт",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 28162.36
-          },
-          {
-            "name": "Rucetti Rap2 SN/CP",
-            "unit": "к-т",
-            "qty_per_work_unit": 4.0,
-            "price_per_unit": 1141.18
-          },
-          {
-            "name": "Morelli 1885Р SN",
-            "unit": "шт",
-            "qty_per_work_unit": 4.0,
-            "price_per_unit": 817.65
-          },
-          {
-            "name": "Петля Adria SN бабочка универсальная неразъемная 100х75 мм матовый хром",
-            "unit": "шт",
-            "qty_per_work_unit": 8.0,
-            "price_per_unit": 235.29
-          },
-          {
-            "name": "Пена монтажная Tytan 65 O2 профессиональная 750 мл",
-            "unit": "шт.",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 865.88
-          },
-          {
-            "name": "Завертка сантехническая Rucetti RAP WC SN/CP Цвет - Белый никель/хром",
-            "unit": "шт",
-            "qty_per_work_unit": 2.0,
-            "price_per_unit": 611.76
-          }
-        ]
-      },
-      {
-        "code": "cornice_installation",
-        "name": "Установка карнизов",
-        "group": "Дверные блоки",
-        "unit": "шт.",
-        "price_per_unit": 1176.47,
-        "materials": [
-          {
-            "name": "Карниз 160-320 см белый Орбис, заглушка",
-            "unit": "шт",
-            "qty_per_work_unit": 1.0,
-            "price_per_unit": 2529.44
-          }
-        ]
-      }
-    ]
+  "works": [
+    {
+      "code": "door_opening_adjustment",
+      "name": "Корректировка дверного проема",
+      "unit": "шт.",
+      "price_per_unit": 2135.29,
+      "materials": [
+        {
+          "name": "Профиль стоечный Knauf 50х50 мм 3 м 0.60 мм",
+          "unit": "м.п.",
+          "qty_per_work_unit": 3.0,
+          "price_per_unit": 186.67
+        },
+        {
+          "name": "Профиль направляющий Knauf 50х40 мм 3 м 0.60 мм",
+          "unit": "м.п.",
+          "qty_per_work_unit": 3.0,
+          "price_per_unit": 163.53
+        },
+        {
+          "name": "Брусок сухой строганый 50х50х2200 мм сорт Экстра хвойные породы сращенный",
+          "unit": "шт.",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 807.06
+        },
+        {
+          "name": "Лента уплотнительная Knauf Дихтунгсбанд 50х3 мм 30 м самоклеящаяся",
+          "unit": "м",
+          "qty_per_work_unit": 3.0,
+          "price_per_unit": 16.63
+        },
+        {
+          "name": "Гипсокартон Knauf 2700х1200х12.5 мм влагостойкий",
+          "unit": "м.кв",
+          "qty_per_work_unit": 1.07,
+          "price_per_unit": 244.37
+        }
+      ]
+    },
+    {
+      "code": "gkl_boxes_and_structures",
+      "name": "Устройство коробов и конструкций из ГКЛ (зашивка коммуникаций в с/у)",
+      "group": "Перегородки, короба, зашивка стен",
+      "unit": "м.кв.",
+      "price_per_unit": 1977.65,
+      "materials": [
+        {
+          "name": "Гипсокартон Knauf 2700х1200х12.5 мм влагостойкий",
+          "unit": "м.кв",
+          "qty_per_work_unit": 1.12,
+          "price_per_unit": 244.37
+        },
+        {
+          "name": "Профиль потолочный Knauf 60х27 мм  0.60 мм",
+          "unit": "м.п.",
+          "qty_per_work_unit": 4.36,
+          "price_per_unit": 142.75
+        },
+        {
+          "name": "Профиль потолочный направляющий Knauf 27х28 мм  0.60 мм",
+          "unit": "м.п.",
+          "qty_per_work_unit": 3.36,
+          "price_per_unit": 104.31
+        },
+        {
+          "name": "Соединитель одноуровневый краб Knauf 60х27 0.9 мм",
+          "unit": "шт.",
+          "qty_per_work_unit": 2.3,
+          "price_per_unit": 61.18
+        },
+        {
+          "name": "Саморезы ГМ 25x3.5 мм усиленные Hard-Fix",
+          "unit": "шт.",
+          "qty_per_work_unit": 20.14,
+          "price_per_unit": 1.15
+        },
+        {
+          "name": "Саморез с дюбелем",
+          "unit": "шт.",
+          "qty_per_work_unit": 5.46,
+          "price_per_unit": 6.36
+        },
+        {
+          "name": "Саморезы клопы 13x4,2 мм с буром усиленные Hard-Fix/Wenzo",
+          "unit": "шт.",
+          "qty_per_work_unit": 25.0,
+          "price_per_unit": 2.45
+        },
+        {
+          "name": "Лента уплотнительная Knauf Дихтунгсбанд 70х3 мм 30 м самоклеящаяся",
+          "unit": "м.п.",
+          "qty_per_work_unit": 1.35,
+          "price_per_unit": 22.04
+        },
+        {
+          "name": "Подвес прямой 60х27 Knauf 30х302 мм 0.9 мм",
+          "unit": "шт",
+          "qty_per_work_unit": 1.83,
+          "price_per_unit": 35.29
+        },
+        {
+          "name": "Лента бумажная Knauf для швов гипсокартона 50 м",
+          "unit": "м",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 4.28
+        },
+        {
+          "name": "Брусок сухой строганый 50х50х2200 мм сорт Экстра хвойные породы сращенный",
+          "unit": "м",
+          "qty_per_work_unit": 0.2,
+          "price_per_unit": 366.85
+        },
+        {
+          "name": "Шпаклевка гипсовая Knauf Унифлот высокопрочная",
+          "unit": "кг",
+          "qty_per_work_unit": 0.4,
+          "price_per_unit": 126.68
+        }
+      ]
+    },
+    {
+      "code": "revision_hatch_installation",
+      "name": "Установка ревизионных люков пластиковых белых",
+      "group": "Перегородки, короба, зашивка стен",
+      "unit": "шт.",
+      "price_per_unit": 1176.47,
+      "materials": [
+        {
+          "name": "Люк ревизионный пластиковый 317х417 мм врезной",
+          "unit": "шт.",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 512.94
+        }
+      ]
+    },
+    {
+      "code": "aquapanel_wall_cladding_no_insulation",
+      "name": "Облицовка стен листами Аквапанелями на металлическом каркасе без изоляции",
+      "group": "Перегородки, короба, зашивка стен",
+      "unit": "м.кв.",
+      "price_per_unit": 2135.29,
+      "materials": [
+        {
+          "name": "Аквапанель Knauf Наружная 1200х2400х12,5мм",
+          "unit": "м.кв",
+          "qty_per_work_unit": 1.12,
+          "price_per_unit": 1065.77
+        },
+        {
+          "name": "Профиль потолочный Knauf 60х27 мм  0.60 мм",
+          "unit": "м.п.",
+          "qty_per_work_unit": 3.0,
+          "price_per_unit": 142.75
+        },
+        {
+          "name": "Профиль потолочный направляющий Knauf 27х28 мм  0.60 мм",
+          "unit": "м.п.",
+          "qty_per_work_unit": 1.5,
+          "price_per_unit": 104.31
+        },
+        {
+          "name": "Саморезы для аквапанелей 25x4.2 мм SN Knauf",
+          "unit": "шт.",
+          "qty_per_work_unit": 20.14,
+          "price_per_unit": 2.91
+        },
+        {
+          "name": "Саморез с дюбелем",
+          "unit": "шт.",
+          "qty_per_work_unit": 5.46,
+          "price_per_unit": 6.36
+        },
+        {
+          "name": "Саморезы клопы 13x4,2 мм с буром усиленные Hard-Fix/Wenzo",
+          "unit": "шт.",
+          "qty_per_work_unit": 25.0,
+          "price_per_unit": 2.45
+        },
+        {
+          "name": "Лента уплотнительная Knauf Дихтунгсбанд 70х3 мм 30 м самоклеящаяся",
+          "unit": "м.п.",
+          "qty_per_work_unit": 1.35,
+          "price_per_unit": 22.04
+        },
+        {
+          "name": "Подвес прямой 60х27 Knauf 30х302 мм 0.9 мм",
+          "unit": "шт",
+          "qty_per_work_unit": 1.83,
+          "price_per_unit": 35.29
+        }
+      ]
+    },
+    {
+      "code": "loggia_wall_priming",
+      "name": "Грунтовка стен лоджии",
+      "group": "Перегородки, короба, зашивка стен",
+      "unit": "м.кв.",
+      "price_per_unit": 97.65,
+      "materials": [
+        {
+          "name": "Грунт универсальный Мультигрунд Кнауф",
+          "unit": "кг",
+          "qty_per_work_unit": 0.45,
+          "price_per_unit": 345.18
+        }
+      ]
+    },
+    {
+      "code": "aquapanel_single_layer_plaster_10mm",
+      "name": "Однослойная штукатурка Аквапанелей толщина слоя 10 мм",
+      "group": "Перегородки, короба, зашивка стен",
+      "unit": "м.кв.",
+      "price_per_unit": 615.29,
+      "materials": [
+        {
+          "name": "КНАУФ-Севенер",
+          "unit": "кг",
+          "qty_per_work_unit": 10.0,
+          "price_per_unit": 33.08
+        },
+        {
+          "name": "Сетка армирующая Knauf Аквапанель наружная",
+          "unit": "кв.м",
+          "qty_per_work_unit": 1.12,
+          "price_per_unit": 168.52
+        },
+        {
+          "name": "Клей для швов Knauf Аквапанель 310 мл",
+          "unit": "шт",
+          "qty_per_work_unit": 0.4,
+          "price_per_unit": 849.41
+        }
+      ]
+    },
+    {
+      "code": "decorative_plaster_application",
+      "name": "Нанесение декоративной штукатурки",
+      "group": "Перегородки, короба, зашивка стен",
+      "unit": "м.кв.",
+      "price_per_unit": 362.35,
+      "materials": [
+        {
+          "name": "Штукатурка декоративная Ceresit СТ 137 Камешковая 2,5 мм зимняя под покраску 25 кг",
+          "unit": "кг",
+          "qty_per_work_unit": 3.0,
+          "price_per_unit": 50.31
+        }
+      ]
+    },
+    {
+      "code": "loggia_wall_painting_2_layers",
+      "name": "Окраска стен лоджии в 2 слоя",
+      "group": "Перегородки, короба, зашивка стен",
+      "unit": "м.кв.",
+      "price_per_unit": 284.71,
+      "materials": [
+        {
+          "name": "Краска водно-дисперсионная фасадная Текс Профи белая основа А",
+          "unit": "литр",
+          "qty_per_work_unit": 0.3,
+          "price_per_unit": 545.62
+        }
+      ]
+    },
+    {
+      "code": "walls_priming_plitonit",
+      "name": "Грунтовка стен",
+      "group": "Стены",
+      "unit": "м.кв.",
+      "price_per_unit": 20.0,
+      "materials": [
+        {
+          "name": "Грунт PLITONIT упрочняющий",
+          "unit": "литр",
+          "qty_per_work_unit": 0.3,
+          "price_per_unit": 282.12
+        }
+      ]
+    },
+    {
+      "code": "walls_nonabsorbent_priming",
+      "name": "Грунтовка слабовпитывающих и не впитывающих влагу оснований",
+      "group": "Стены",
+      "unit": "м.кв.",
+      "price_per_unit": 102.35,
+      "materials": [
+        {
+          "name": "Бетоконтакт Кнауф",
+          "unit": "литр",
+          "qty_per_work_unit": 0.35,
+          "price_per_unit": 391.76
+        }
+      ]
+    },
+    {
+      "code": "walls_plaster_gypsum_beacons",
+      "name": "Штукатурка стен до 20 мм гипсовыми смесями по маякам",
+      "group": "Стены",
+      "unit": "м.кв.",
+      "price_per_unit": 685.88,
+      "materials": [
+        {
+          "name": "Штукатурка гипсовая Knauf Rotband",
+          "unit": "кг",
+          "qty_per_work_unit": 18.0,
+          "price_per_unit": 22.2
+        },
+        {
+          "name": "Профиль Knauf маячковый 6 мм 3 м 0,60 мм оцинкованный",
+          "unit": "шт.",
+          "qty_per_work_unit": 0.7,
+          "price_per_unit": 327.06
+        }
+      ]
+    },
+    {
+      "code": "walls_plaster_cement_beacons_bath",
+      "name": "Штукатурка стен до 20 мм цементными смесями по маякам в с/у",
+      "group": "Стены",
+      "unit": "м.кв.",
+      "price_per_unit": 763.53,
+      "materials": [
+        {
+          "name": "Штукатурка цементная Волма Аквастарт",
+          "unit": "кг",
+          "qty_per_work_unit": 36.0,
+          "price_per_unit": 16.85
+        },
+        {
+          "name": "Профиль Knauf маячковый 6 мм 3 м 0,60 мм оцинкованный",
+          "unit": "шт.",
+          "qty_per_work_unit": 0.7,
+          "price_per_unit": 327.06
+        },
+        {
+          "name": "Ремонтный состав ХАРДСКРИН RC20",
+          "unit": "кг",
+          "qty_per_work_unit": 0.5,
+          "price_per_unit": 77.65
+        }
+      ]
+    },
+    {
+      "code": "corner_profile_installation",
+      "name": "Установка углозащитного профиля",
+      "group": "Стены",
+      "unit": "шт.",
+      "price_per_unit": 201.18,
+      "materials": [
+        {
+          "name": "Профиль Knauf углозащитный оцинкованный 31х31 мм 3 м 0,60 мм",
+          "unit": "шт.",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 448.24
+        }
+      ]
+    },
+    {
+      "code": "walls_putty",
+      "name": "Шпатлевка стен",
+      "group": "Стены",
+      "unit": "м.кв.",
+      "price_per_unit": 317.65,
+      "materials": [
+        {
+          "name": "Шпаклевка для сухих помещений weber.vetonit LR",
+          "unit": "кг",
+          "qty_per_work_unit": 2.8,
+          "price_per_unit": 46.47
+        }
+      ]
+    },
+    {
+      "code": "wallpapering",
+      "name": "Оклейка стен обоями",
+      "group": "Стены",
+      "unit": "м.кв.",
+      "price_per_unit": 478.82,
+      "materials": [
+        {
+          "name": "Клей Quelyd флизелиновый для обоев",
+          "unit": "кг",
+          "qty_per_work_unit": 0.02,
+          "price_per_unit": 1635.29
+        },
+        {
+          "name": "Обои виниловые Practic Strukturtapeten 3549-25",
+          "unit": "м.кв",
+          "qty_per_work_unit": 1.12,
+          "price_per_unit": 114.02
+        }
+      ]
+    },
+    {
+      "code": "wall_painting",
+      "name": "Окраска стен",
+      "group": "Стены",
+      "unit": "м.кв.",
+      "price_per_unit": 180.0,
+      "materials": [
+        {
+          "name": "Краска водно-дисперсионная Текс Моющаяся Профи",
+          "unit": "литр",
+          "qty_per_work_unit": 0.3,
+          "price_per_unit": 417.91
+        }
+      ]
+    },
+    {
+      "code": "ceramic_tile_wall_cladding",
+      "name": "Облицовка стен керамической плиткой",
+      "group": "Стены",
+      "unit": "м.кв.",
+      "price_per_unit": 1475.29,
+      "materials": [
+        {
+          "name": "Плитка облицовочная Unitile Муза белая 400x250x8 мм",
+          "unit": "м.кв",
+          "qty_per_work_unit": 1.1,
+          "price_per_unit": 1077.65
+        },
+        {
+          "name": "Плитка облицовочная Unitile Муза бежевая 02 400x250x8 мм",
+          "unit": "м.кв",
+          "qty_per_work_unit": 8.0,
+          "price_per_unit": 1123.53
+        },
+        {
+          "name": "Клей для плитки Крепс Усиленный",
+          "unit": "кг",
+          "qty_per_work_unit": 10.0,
+          "price_per_unit": 21.98
+        },
+        {
+          "name": "Затирка Ceresit CE 33 43 багамы",
+          "unit": "кг",
+          "qty_per_work_unit": 0.5,
+          "price_per_unit": 194.12
+        }
+      ]
+    },
+    {
+      "code": "slopes_gkl_cladding",
+      "name": "Облицовка откосов ГКЛ",
+      "group": "Откосы",
+      "unit": "м.п.",
+      "price_per_unit": 757.65,
+      "materials": [
+        {
+          "name": "Гипсокартон Knauf 2700х1200х12.5 мм влагостойкий",
+          "unit": "м.кв",
+          "qty_per_work_unit": 0.28,
+          "price_per_unit": 244.37
+        },
+        {
+          "name": "Пена монтажная Tytan 65 O2 профессиональная 750 мл",
+          "unit": "шт.",
+          "qty_per_work_unit": 0.25,
+          "price_per_unit": 865.88
+        },
+        {
+          "name": "Штукатурка гипсовая Knauf Rotband",
+          "unit": "кг",
+          "qty_per_work_unit": 1.2,
+          "price_per_unit": 22.2
+        }
+      ]
+    },
+    {
+      "code": "slopes_priming",
+      "name": "Грунтовка откосов",
+      "group": "Откосы",
+      "unit": "м.п.",
+      "price_per_unit": 64.71,
+      "materials": [
+        {
+          "name": "Грунт PLITONIT упрочняющий",
+          "unit": "литр",
+          "qty_per_work_unit": 0.08,
+          "price_per_unit": 282.12
+        }
+      ]
+    },
+    {
+      "code": "slopes_putty",
+      "name": "Шпатлевка откосов",
+      "group": "Откосы",
+      "unit": "м.п.",
+      "price_per_unit": 343.53,
+      "materials": [
+        {
+          "name": "Шпатлевка Danogips Superfinish",
+          "unit": "литр",
+          "qty_per_work_unit": 0.5,
+          "price_per_unit": 125.26
+        }
+      ]
+    },
+    {
+      "code": "slopes_wallpapering",
+      "name": "Оклейка откосов флизелином",
+      "group": "Откосы",
+      "unit": "м.п.",
+      "price_per_unit": 452.94,
+      "materials": [
+        {
+          "name": "Клей Quelyd флизелиновый для обоев",
+          "unit": "кг",
+          "qty_per_work_unit": 0.0,
+          "price_per_unit": 1635.29
+        },
+        {
+          "name": "Малярный флизелин Oscar OsF110 (1х25 м) плотность 110 г/кв.м",
+          "unit": "м.кв",
+          "qty_per_work_unit": 0.28,
+          "price_per_unit": 137.22
+        }
+      ]
+    },
+    {
+      "code": "slopes_painting",
+      "name": "Окраска откосов",
+      "group": "Откосы",
+      "unit": "м.п.",
+      "price_per_unit": 232.94,
+      "materials": [
+        {
+          "name": "Краска латексная Текс Профи моющаяся белая основа",
+          "unit": "литр",
+          "qty_per_work_unit": 0.08,
+          "price_per_unit": 526.8
+        }
+      ]
+    },
+    {
+      "code": "slopes_frame_joint_finishing",
+      "name": "Финишная заделка стыка рама-откос по периметру оконного проема",
+      "group": "Откосы",
+      "unit": "м.п.",
+      "price_per_unit": 123.53,
+      "materials": [
+        {
+          "name": "Жидкий пластик Cosmofen 345 белый 305 мл",
+          "unit": "шт",
+          "qty_per_work_unit": 0.1,
+          "price_per_unit": 1037.65
+        }
+      ]
+    },
+    {
+      "code": "pvc_windowsill_installation",
+      "name": "Установка подоконников из ПВХ",
+      "group": "Откосы",
+      "unit": "м.п.",
+      "price_per_unit": 750.59,
+      "materials": [
+        {
+          "name": "Подоконник ПВХ белый 300 мм",
+          "unit": "м.п.",
+          "qty_per_work_unit": 1.1,
+          "price_per_unit": 370.59
+        },
+        {
+          "name": "Пена монтажная Tytan 65 O2 профессиональная 750 мл",
+          "unit": "шт.",
+          "qty_per_work_unit": 0.5,
+          "price_per_unit": 865.88
+        }
+      ]
+    },
+    {
+      "code": "bathroom_floor_waterproofing",
+      "name": "Гидроизоляция пола в с/у с подъемом на стены до 150 мм",
+      "group": "Пол",
+      "unit": "м.кв.",
+      "price_per_unit": 530.59,
+      "materials": [
+        {
+          "name": "Гидроизоляционная мастика KIILTO Fiberpool",
+          "unit": "кг",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 1032.61
+        },
+        {
+          "name": "Лента упрочняющая Kiilto 20 см",
+          "unit": "м",
+          "qty_per_work_unit": 15.59,
+          "price_per_unit": 142.73
+        },
+        {
+          "name": "Грунт Kiilto Фиберпул Праймер",
+          "unit": "литр",
+          "qty_per_work_unit": 0.15,
+          "price_per_unit": 1056.47
+        }
+      ]
+    },
+    {
+      "code": "floor_final_leveling",
+      "name": "Финишное выравнивание полов",
+      "group": "Пол",
+      "unit": "м.кв.",
+      "price_per_unit": 530.59,
+      "materials": [
+        {
+          "name": "Ровнитель для пола Основит FK45R Скорлайн",
+          "unit": "кг",
+          "qty_per_work_unit": 10.2,
+          "price_per_unit": 32.76
+        }
+      ]
+    },
+    {
+      "code": "ceramic_tile_floor_installation",
+      "name": "Устройство покрытия пола из керамической плитки",
+      "group": "Пол",
+      "unit": "м.кв.",
+      "price_per_unit": 1469.41,
+      "materials": [
+        {
+          "name": "Конфетти сер КГ 02 400х400 (1-й сорт)",
+          "unit": "м.кв",
+          "qty_per_work_unit": 1.1,
+          "price_per_unit": 1134.12
+        },
+        {
+          "name": "Керамогранит Unitile Техногрес Мираж светло-серый рельеф 300х300х8 мм",
+          "unit": "м.кв",
+          "qty_per_work_unit": 1.1,
+          "price_per_unit": 754.12
+        },
+        {
+          "name": "Клей для плитки Крепс Усиленный",
+          "unit": "кг",
+          "qty_per_work_unit": 10.0,
+          "price_per_unit": 21.98
+        },
+        {
+          "name": "Затирка Ceresit CE 33",
+          "unit": "кг",
+          "qty_per_work_unit": 0.7,
+          "price_per_unit": 138.12
+        }
+      ]
+    },
+    {
+      "code": "laminate_floating_floor_installation",
+      "name": "Устройство покрытия пола из ламината \"плавающий пол\"",
+      "group": "Пол",
+      "unit": "м.кв.",
+      "price_per_unit": 452.94,
+      "materials": [
+        {
+          "name": "Подложка вспененная Стенофон 2 мм 1,05х50 м",
+          "unit": "м.кв",
+          "qty_per_work_unit": 1.2,
+          "price_per_unit": 23.53
+        },
+        {
+          "name": "Ламинат Egger Pro 8/32 Classic 1292x193x8 мм",
+          "unit": "м.кв",
+          "qty_per_work_unit": 1.11,
+          "price_per_unit": 1170.59
+        }
+      ]
+    },
+    {
+      "code": "mdf_baseboard_installation",
+      "name": "Установка плинтуса МДФ",
+      "group": "Пол",
+      "unit": "м.п.",
+      "price_per_unit": 478.82,
+      "materials": [
+        {
+          "name": "Плинтус МДФ VellDoris Экошпон 70х16х2100 (Эмалит белый)",
+          "unit": "м.п.",
+          "qty_per_work_unit": 1.1,
+          "price_per_unit": 304.71
+        },
+        {
+          "name": "Монтажная планка для плинтуса Cosca Décor 2400 мм",
+          "unit": "м.п.",
+          "qty_per_work_unit": 1.1,
+          "price_per_unit": 65.69
+        }
+      ]
+    },
+    {
+      "code": "floor_coverings_joint_installation",
+      "name": "Устройство стыков напольных покрытий",
+      "group": "Пол",
+      "unit": "шт",
+      "price_per_unit": 608.24,
+      "materials": [
+        {
+          "name": "Самоклеящийся порог 42 мм Идеал ПИ30-0,9 Дуб латте 229",
+          "unit": "шт.",
+          "qty_per_work_unit": 4.0,
+          "price_per_unit": 88.24
+        },
+        {
+          "name": "Уголок GAH ALBERTS алюминиевый, серебро 10x10x1х2,6м, 480172",
+          "unit": "шт",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 317.65
+        }
+      ]
+    },
+    {
+      "code": "loggia_floor_insulation",
+      "name": "Укладка теплоизоляции на пол лоджии",
+      "group": "Пол",
+      "unit": "м.кв.",
+      "price_per_unit": 452.94,
+      "materials": [
+        {
+          "name": "Утеплитель ROCKWOOL Флор Баттс 1000х600х50 мм",
+          "unit": "м.кв",
+          "qty_per_work_unit": 1.03,
+          "price_per_unit": 886.77
+        },
+        {
+          "name": "Ветро-влагозащита для кровли/стен Изоспан AQ Proff 188",
+          "unit": "м.кв",
+          "qty_per_work_unit": 1.3,
+          "price_per_unit": 174.12
+        },
+        {
+          "name": "Пена монтажная Tytan 65 O2 профессиональная 750 мл",
+          "unit": "шт.",
+          "qty_per_work_unit": 0.5,
+          "price_per_unit": 865.88
+        }
+      ]
+    },
+    {
+      "code": "loggia_floor_screed_upto_40mm",
+      "name": "Устройство стяжки пола, толщина слоя до 40 мм на лоджии",
+      "group": "Пол",
+      "unit": "м.кв.",
+      "price_per_unit": 680.0,
+      "materials": [
+        {
+          "name": "ЦПС М300",
+          "unit": "кг",
+          "qty_per_work_unit": 110.0,
+          "price_per_unit": 10.78
+        },
+        {
+          "name": "Сетка кладочная 50х50 мм d3,5-3,8 мм 0,51х2 м",
+          "unit": "м.кв",
+          "qty_per_work_unit": 1.2,
+          "price_per_unit": 448.67
+        },
+        {
+          "name": "Пленка армированная 200 г/кв.м",
+          "unit": "м.кв",
+          "qty_per_work_unit": 1.2,
+          "price_per_unit": 99.41
+        },
+        {
+          "name": "Лента кромочная демпферная Knauf FE для пола 100х8 мм",
+          "unit": "м.п.",
+          "qty_per_work_unit": 9.6,
+          "price_per_unit": 40.76
+        }
+      ]
+    },
+    {
+      "code": "ceiling_priming_dust_removal",
+      "name": "Грунтовка потолка под натяжные, реечные потолки (обеспыливание)",
+      "group": "Потолок",
+      "unit": "м.кв.",
+      "price_per_unit": 108.24,
+      "materials": [
+        {
+          "name": "Грунт PLITONIT упрочняющий",
+          "unit": "литр",
+          "qty_per_work_unit": 0.2,
+          "price_per_unit": 282.12
+        }
+      ]
+    },
+    {
+      "code": "ceiling_priming_for_plaster",
+      "name": "Грунтовка потолка под штукатурку",
+      "group": "Потолок",
+      "unit": "м.кв.",
+      "price_per_unit": 108.24,
+      "materials": [
+        {
+          "name": "Бетоконтакт Кнауф",
+          "unit": "литр",
+          "qty_per_work_unit": 0.35,
+          "price_per_unit": 391.76
+        }
+      ]
+    },
+    {
+      "code": "ceiling_layered_priming",
+      "name": "Грунтовка потолков послойная",
+      "group": "Потолок",
+      "unit": "м.кв.",
+      "price_per_unit": 108.24,
+      "materials": [
+        {
+          "name": "Грунт PLITONIT упрочняющий",
+          "unit": "литр",
+          "qty_per_work_unit": 0.3,
+          "price_per_unit": 282.12
+        }
+      ]
+    },
+    {
+      "code": "ceiling_putty",
+      "name": "Шпатлевка потолка",
+      "group": "Потолок",
+      "unit": "м.кв.",
+      "price_per_unit": 408.24,
+      "materials": [
+        {
+          "name": "Шпаклевка для сухих помещений weber.vetonit LR",
+          "unit": "кг",
+          "qty_per_work_unit": 2.8,
+          "price_per_unit": 46.47
+        }
+      ]
+    },
+    {
+      "code": "ceiling_painting_2_layers",
+      "name": "Окраска потолка в 2 слоя",
+      "group": "Потолок",
+      "unit": "м.кв.",
+      "price_per_unit": 364.71,
+      "materials": [
+        {
+          "name": "Краска латексная Текс Профи моющаяся белая основа",
+          "unit": "литр",
+          "qty_per_work_unit": 0.3,
+          "price_per_unit": 526.8
+        }
+      ]
+    },
+    {
+      "code": "stretch_ceiling_installation",
+      "name": "Устройство натяжных потолков",
+      "group": "Потолок",
+      "unit": "м.кв.",
+      "price_per_unit": 635.29,
+      "materials": [
+        {
+          "name": "Потолок натяжной в комплекте",
+          "unit": "м.кв",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 1176.47
+        }
+      ]
+    },
+    {
+      "code": "plumbing_collector_distribution",
+      "name": "Коллекторная разводка ГВС, ХВС и канализации от стояков (унитаз2, раковина2, мойка, СМ, ванна)",
+      "group": "Сантехника",
+      "unit": "точка",
+      "price_per_unit": 7927.06,
+      "materials": [
+        {
+          "name": "Трубы, фитинги, фасонные части и т.п.",
+          "unit": "точка",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 8894.12
+        }
+      ]
+    },
+    {
+      "code": "toilet_installation",
+      "name": "Установка унитаза с бачком непосредственно присоединенном",
+      "group": "Сантехника",
+      "unit": "шт.",
+      "price_per_unit": 3882.35,
+      "materials": [
+        {
+          "name": "Унитаз Cersanit Parva Clean On 011 3/6 DPL EO",
+          "unit": "шт.",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 13647.06
+        },
+        {
+          "name": "Гофра AlcaPlast A97",
+          "unit": "шт.",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 1376.47
+        }
+      ]
+    },
+    {
+      "code": "bathtub_installation",
+      "name": "Установка ванны без гидромассажа",
+      "group": "Сантехника",
+      "unit": "шт.",
+      "price_per_unit": 5188.24,
+      "materials": [
+        {
+          "name": "Акриловая ванна Cersanit Build 170x70",
+          "unit": "шт.",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 31988.25
+        },
+        {
+          "name": "Панель фронтальная для ванны акриловой CERSANIT 170 см универсальная",
+          "unit": "шт.",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 7363.53
+        },
+        {
+          "name": "Сифон для ванны Cersanit ZP-SY1000004",
+          "unit": "шт.",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 2341.18
+        }
+      ]
+    },
+    {
+      "code": "washbasin_cabinet_installation",
+      "name": "Установка тумбы под раковину",
+      "group": "Сантехника",
+      "unit": "шт.",
+      "price_per_unit": 3105.88,
+      "materials": [
+        {
+          "name": "Тумба под раковину CERSANIT Colour 600 мм подвесная",
+          "unit": "шт.",
+          "qty_per_work_unit": 2.5,
+          "price_per_unit": 14116.48
+        },
+        {
+          "name": "Тумба под раковину Cersanit Moduo 40 подвесная",
+          "unit": "шт.",
+          "qty_per_work_unit": 4.5,
+          "price_per_unit": 13516.48
+        }
+      ]
+    },
+    {
+      "code": "washbasin_installation",
+      "name": "Установка раковины",
+      "group": "Сантехника",
+      "unit": "шт.",
+      "price_per_unit": 3105.88,
+      "materials": [
+        {
+          "name": "Раковина для тумбы CERSANIT Como 600 мм",
+          "unit": "шт.",
+          "qty_per_work_unit": 6.5,
+          "price_per_unit": 5056.47
+        },
+        {
+          "name": "Раковина Cersanit Moduo 40",
+          "unit": "шт.",
+          "qty_per_work_unit": 8.5,
+          "price_per_unit": 4857.65
+        },
+        {
+          "name": "Сифон для раковины WIRQUIN 30718050",
+          "unit": "шт.",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 404.71
+        }
+      ]
+    },
+    {
+      "code": "mirror_cabinet_installation",
+      "name": "Установка шкафчика/зеркала над раковиной",
+      "group": "Сантехника",
+      "unit": "шт.",
+      "price_per_unit": 3105.88,
+      "materials": [
+        {
+          "name": "Зеркало с полочкой Evoform ATTRACTIVE BY 0506 60x80 см",
+          "unit": "шт.",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 2767.06
+        }
+      ]
+    },
+    {
+      "code": "mixer_installation_surface",
+      "name": "Установка смесителей наружного монтажа",
+      "group": "Сантехника",
+      "unit": "шт.",
+      "price_per_unit": 2588.24,
+      "materials": [
+        {
+          "name": "Смеситель Cersanit Cari 63025 для раковины",
+          "unit": "шт.",
+          "qty_per_work_unit": 10.67,
+          "price_per_unit": 8105.89
+        },
+        {
+          "name": "Смеситель Elghansa Scarlett 1612225-BR01 для раковины с гигиеническим душем",
+          "unit": "шт.",
+          "qty_per_work_unit": 12.33,
+          "price_per_unit": 13.0
+        },
+        {
+          "name": "СМЕСИТЕЛЬ CARI ДЛЯ ВАННЫ",
+          "unit": "шт.",
+          "qty_per_work_unit": 16.33,
+          "price_per_unit": 7400.0
+        }
+      ]
+    },
+    {
+      "code": "shower_system_installation",
+      "name": "Установка душевой системы",
+      "group": "Сантехника",
+      "unit": "шт.",
+      "price_per_unit": 3882.35,
+      "materials": [
+        {
+          "name": "Душевой гарнитур Cersanit Vibe 63067 хром",
+          "unit": "шт.",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 4694.12
+        }
+      ]
+    },
+    {
+      "code": "radiator_reinstallation",
+      "name": "Демонтаж-монтаж радиаторов отопления без изменения конфигурации и точек подключения",
+      "group": "Сантехника",
+      "unit": "шт.",
+      "price_per_unit": 6241.18,
+      "materials": []
+    },
+    {
+      "code": "electrical_devices_dismantling",
+      "name": "Демонтаж существующих электроустановочных изделий",
+      "group": "Электрика",
+      "unit": "комп.",
+      "price_per_unit": 6017.65,
+      "materials": []
+    },
+    {
+      "code": "electrical_boxes_installation_new",
+      "name": "Установка коробок под электроустановочные изделия с устройством отверстий",
+      "group": "Электрика",
+      "unit": "шт.",
+      "price_per_unit": 530.59,
+      "materials": [
+        {
+          "name": "Коробки установочные",
+          "unit": "шт.",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 48.8
+        }
+      ]
+    },
+    {
+      "code": "electrical_boxes_replacement",
+      "name": "Замена коробок под электроустановочные изделия",
+      "group": "Электрика",
+      "unit": "шт.",
+      "price_per_unit": 258.82,
+      "materials": [
+        {
+          "name": "Коробки установочные",
+          "unit": "шт.",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 48.8
+        }
+      ]
+    },
+    {
+      "code": "grooving_in_concrete",
+      "name": "Пробивка штроб в бетонных конструкциях",
+      "group": "Электрика",
+      "unit": "м.п.",
+      "price_per_unit": 569.41,
+      "materials": []
+    },
+    {
+      "code": "grooving_in_masonry",
+      "name": "Пробивка штроб в каменных конструкциях и (или) в штукатурном слое",
+      "group": "Электрика",
+      "unit": "м.п.",
+      "price_per_unit": 478.82,
+      "materials": []
+    },
+    {
+      "code": "cable_laying_with_junction_boxes",
+      "name": "Прокладка кабеля с установкой ответвит. коробок",
+      "group": "Электрика",
+      "unit": "м.п.",
+      "price_per_unit": 249.41,
+      "materials": [
+        {
+          "name": "Кабель типа ВВГнг LS 3х2,5; 3х1,5",
+          "unit": "м.п.",
+          "qty_per_work_unit": 1.2,
+          "price_per_unit": 84.33
+        },
+        {
+          "name": "Гофра электротехническая",
+          "unit": "м.п.",
+          "qty_per_work_unit": 0.7,
+          "price_per_unit": 13.18
+        },
+        {
+          "name": "Коробки распаячные",
+          "unit": "шт.",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 96.47
+        },
+        {
+          "name": "SAT-703, витая пара",
+          "unit": "м.п.",
+          "qty_per_work_unit": 0.0,
+          "price_per_unit": 57.48
+        },
+        {
+          "name": "Антенный делитель",
+          "unit": "шт.",
+          "qty_per_work_unit": 0.0,
+          "price_per_unit": 600.0
+        }
+      ]
+    },
+    {
+      "code": "electrical_devices_installation",
+      "name": "Монтаж электроустановочных изделий",
+      "group": "Электрика",
+      "unit": "шт.",
+      "price_per_unit": 409.41,
+      "materials": [
+        {
+          "name": "Розетка Schneider Electric Atlas Design ATN000143 скрытая установка белая с заземлением с рамкой",
+          "unit": "шт.",
+          "qty_per_work_unit": 10.0,
+          "price_per_unit": 295.29
+        },
+        {
+          "name": "Розетка Schneider Electric Atlas Design ATN440146 скрытая установка белая с заземлением IP44 со шторками с крышкой",
+          "unit": "шт",
+          "qty_per_work_unit": 2.0,
+          "price_per_unit": 420.0
+        },
+        {
+          "name": "Выключатель Schneider Electric Atlas Design ATN000151 двухклавишный скрытая установка белый с рамкой",
+          "unit": "шт",
+          "qty_per_work_unit": 4.0,
+          "price_per_unit": 330.59
+        }
+      ]
+    },
+    {
+      "code": "electric_towel_warmer_installation",
+      "name": "Установка электрического полотенцесушителя",
+      "group": "Электрика",
+      "unit": "шт.",
+      "price_per_unit": 3882.35,
+      "materials": [
+        {
+          "name": "Полотенцесушитель электрический Indigo Line Electro LСLE60-50HL/R",
+          "unit": "шт.",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 8391.77
+        }
+      ]
+    },
+    {
+      "code": "light_fixture_installation",
+      "name": "Установка светильника",
+      "group": "Электрика",
+      "unit": "шт.",
+      "price_per_unit": 1423.53,
+      "materials": [
+        {
+          "name": "Светильник SVET НБП 01-60-033 со стеклом , белый SV0102-0009",
+          "unit": "шт.",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 443.53
+        }
+      ]
+    },
+    {
+      "code": "door_blocks_installation",
+      "name": "Установка дверных блоков",
+      "group": "Дверные блоки",
+      "unit": "шт.",
+      "price_per_unit": 3529.41,
+      "materials": [
+        {
+          "name": "Velldoris Classico 3 2P Экошпон, царговая, глухая без притвора, белый эмалит",
+          "unit": "шт",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 28162.36
+        },
+        {
+          "name": "Rucetti Rap2 SN/CP",
+          "unit": "к-т",
+          "qty_per_work_unit": 4.0,
+          "price_per_unit": 1141.18
+        },
+        {
+          "name": "Morelli 1885Р SN",
+          "unit": "шт",
+          "qty_per_work_unit": 4.0,
+          "price_per_unit": 817.65
+        },
+        {
+          "name": "Петля Adria SN бабочка универсальная неразъемная 100х75 мм матовый хром",
+          "unit": "шт",
+          "qty_per_work_unit": 8.0,
+          "price_per_unit": 235.29
+        },
+        {
+          "name": "Пена монтажная Tytan 65 O2 профессиональная 750 мл",
+          "unit": "шт.",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 865.88
+        },
+        {
+          "name": "Завертка сантехническая Rucetti RAP WC SN/CP Цвет - Белый никель/хром",
+          "unit": "шт",
+          "qty_per_work_unit": 2.0,
+          "price_per_unit": 611.76
+        }
+      ]
+    },
+    {
+      "code": "cornice_installation",
+      "name": "Установка карнизов",
+      "group": "Дверные блоки",
+      "unit": "шт.",
+      "price_per_unit": 1176.47,
+      "materials": [
+        {
+          "name": "Карниз 160-320 см белый Орбис, заглушка",
+          "unit": "шт",
+          "qty_per_work_unit": 1.0,
+          "price_per_unit": 2529.44
+        }
+      ]
+    },
+    {
+      "group": "Стены",
+      "name": "Монтаж уголка пластикового",
+      "code": "Corn",
+      "unit": "М.п.",
+      "price_per_unit": 50.0,
+      "materials": [
+        {
+          "name": "Уголок пластиковый",
+          "unit": "М.п.",
+          "qty_per_work_unit": 1.3,
+          "price_per_unit": 45.0
+        }
+      ]
+    },
+    {
+      "name": "Укрытие защитной пленкой",
+      "group": "Плиточные работы",
+      "code": "Covering_with_protective_film",
+      "unit": "м.кв",
+      "price_per_unit": 15.0,
+      "materials": []
+    }
+  ],
+  "groups": [
+    "Стены",
+    "Плиточные работы"
+  ]
 }
