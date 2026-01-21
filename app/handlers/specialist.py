@@ -1233,14 +1233,15 @@ async def handle_letter_choice(message: Message, state: FSMContext):
     await message.answer("Прикрепите файл обращения (например, PDF) или отправьте «-», если письма нет.")
 
 
-@router.message(StateFilter(NewRequestStates.confirmation), F.text.lower() == "подтвердить")
-async def confirm_request(message: Message, state: FSMContext):
+@router.callback_query(F.data == "spec:confirm_request", StateFilter(NewRequestStates.confirmation))
+async def confirm_request(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     async with async_session() as session:
         specialist = await session.scalar(select(User).where(User.id == data["specialist_id"]))
         if not specialist:
-            await message.answer("Не удалось идентифицировать специалиста. Попробуйте снова.")
+            await callback.message.answer("Не удалось идентифицировать специалиста. Попробуйте снова.")
             await state.clear()
+            await callback.answer()
             return
 
         engineer_user = await session.scalar(
@@ -1249,8 +1250,9 @@ async def confirm_request(message: Message, state: FSMContext):
             .where(User.id == data["engineer_id"])
         )
         if not engineer_user:
-            await message.answer("Выбранный инженер не найден. Попробуйте снова.")
+            await callback.message.answer("Выбранный инженер не найден. Попробуйте снова.")
             await state.clear()
+            await callback.answer()
             return
 
         # Убеждаемся, что у выбранного инженера есть профиль Engineer, если он не является инженером по роли
@@ -1306,18 +1308,20 @@ async def confirm_request(message: Message, state: FSMContext):
             due_at = request.due_at
         except Exception as e:
             await session.rollback()
-            await message.answer(
+            await callback.message.answer(
                 f"❌ Ошибка при создании заявки: {str(e)}\n"
                 "Попробуйте создать заявку заново или обратитесь к администратору."
             )
             await state.clear()
+            await callback.answer()
             return
 
-    await message.answer(
+    await callback.message.answer(
         f"✅ Заявка {request_label} создана и назначена инженеру.\n"
         "Следите за статусом в разделе «📄 Мои заявки»."
     )
     await state.clear()
+    await callback.answer("Заявка создана")
 
     engineer_telegram = getattr(engineer_user, "telegram_id", None) if engineer_user else None
     if engineer_telegram:
@@ -1332,20 +1336,16 @@ async def confirm_request(message: Message, state: FSMContext):
         if data.get("letter_file_id"):
             notification += "\nПисьмо: приложено."
         try:
-            await message.bot.send_message(chat_id=int(engineer_telegram), text=notification)
+            await callback.message.bot.send_message(chat_id=int(engineer_telegram), text=notification)
         except Exception:
             pass
 
 
-@router.message(StateFilter(NewRequestStates.confirmation), F.text.lower() == "отмена")
-async def cancel_request(message: Message, state: FSMContext):
+@router.callback_query(F.data == "spec:cancel_request", StateFilter(NewRequestStates.confirmation))
+async def cancel_request(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    await message.answer("Создание заявки отменено.")
-
-
-@router.message(StateFilter(NewRequestStates.confirmation))
-async def confirmation_help(message: Message):
-    await message.answer("Введите «Подтвердить» для сохранения или «Отмена» для отмены.")
+    await callback.message.answer("Создание заявки отменено.")
+    await callback.answer()
 
 
 # --- вспомогательные функции ---
@@ -1355,7 +1355,14 @@ async def _send_summary(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     summary = _build_request_summary(data)
     await state.set_state(NewRequestStates.confirmation)
-    await message.answer(summary)
+    
+    # Создаем кнопки для подтверждения
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Подтвердить", callback_data="spec:confirm_request")
+    builder.button(text="❌ Отменить", callback_data="spec:cancel_request")
+    builder.adjust(1)
+    
+    await message.answer(summary, reply_markup=builder.as_markup())
 
 
 def _build_request_summary(data: dict) -> str:
@@ -1378,7 +1385,7 @@ def _build_request_summary(data: dict) -> str:
         f"🔹 Место осмотра: {data.get('inspection_location') or 'адрес объекта'}\n"
         f"🔹 Срок устранения: {data.get('remedy_term_days', 14)} дней\n"
         f"🔹 Письмо: {letter_text}\n\n"
-        "Отправьте «Подтвердить» для создания заявки или «Отмена» для отмены."
+        "Нажмите кнопку ниже для подтверждения или отмены создания заявки."
     )
 
 STATUS_TITLES = {

@@ -208,14 +208,15 @@ async def engineer_create_phone(message: Message, state: FSMContext):
     await _send_engineer_creation_summary(message, state)
 
 
-@router.message(StateFilter(EngineerCreateStates.confirmation), F.text.lower() == "подтвердить")
-async def engineer_create_confirm(message: Message, state: FSMContext):
+@router.callback_query(F.data == "eng:confirm_create", StateFilter(EngineerCreateStates.confirmation))
+async def engineer_create_confirm(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     async with async_session() as session:
-        engineer = await _get_engineer(session, message.from_user.id)
+        engineer = await _get_engineer(session, callback.from_user.id)
         if not engineer:
-            await message.answer("Нет доступа к созданию заявки.")
+            await callback.message.answer("Нет доступа к созданию заявки.")
             await state.clear()
+            await callback.answer()
             return
 
         create_data = RequestCreateData(
@@ -234,22 +235,19 @@ async def engineer_create_confirm(message: Message, state: FSMContext):
         await session.commit()
 
     label = format_request_label(request)
-    await message.answer(
+    await callback.message.answer(
         f"✅ Заявка {label} создана. Вы назначены ответственным инженером.\n"
         "Следите за статусом в разделе «📋 Мои заявки».",
     )
     await state.clear()
+    await callback.answer("Заявка создана")
 
 
-@router.message(StateFilter(EngineerCreateStates.confirmation), F.text.lower() == "отмена")
-async def engineer_create_cancel(message: Message, state: FSMContext):
+@router.callback_query(F.data == "eng:cancel_create", StateFilter(EngineerCreateStates.confirmation))
+async def engineer_create_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    await message.answer("Создание заявки отменено.")
-
-
-@router.message(StateFilter(EngineerCreateStates.confirmation))
-async def engineer_create_help(message: Message):
-    await message.answer("Отправьте «Подтвердить» для сохранения или «Отмена» для отмены.")
+    await callback.message.answer("Создание заявки отменено.")
+    await callback.answer()
 
 
 async def _maybe_cancel_engineer_creation(message: Message, state: FSMContext) -> bool:
@@ -265,7 +263,14 @@ async def _send_engineer_creation_summary(message: Message, state: FSMContext) -
     data = await state.get_data()
     summary = _build_engineer_creation_summary(data)
     await state.set_state(EngineerCreateStates.confirmation)
-    await message.answer(summary)
+    
+    # Создаем кнопки для подтверждения
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Подтвердить", callback_data="eng:confirm_create")
+    builder.button(text="❌ Отменить", callback_data="eng:cancel_create")
+    builder.adjust(1)
+    
+    await message.answer(summary, reply_markup=builder.as_markup())
 
 
 def _build_engineer_creation_summary(data: dict) -> str:
@@ -280,7 +285,7 @@ def _build_engineer_creation_summary(data: dict) -> str:
         f"• Квартира: {apartment}\n"
         f"• Описание: {description}\n"
         f"• Контакт: {data.get('contact_person')} / {phone}\n\n"
-        "Отправьте «Подтвердить» для создания или «Отмена», чтобы прервать."
+        "Нажмите кнопку ниже для подтверждения или отмены создания заявки."
     )
 
 
