@@ -37,7 +37,8 @@ class Request(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
-    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Увеличенный размер заголовка, чтобы влезали длинные формулировки дефектов
+    title: Mapped[str] = mapped_column(String(1024), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[RequestStatus] = mapped_column(
         Enum(RequestStatus),
