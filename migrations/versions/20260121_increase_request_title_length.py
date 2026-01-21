@@ -10,7 +10,9 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = "increase_request_title_length_20260121"
+# Важно: длина значения должна быть <= 32 символов,
+# так как столбец alembic_version.version_num имеет тип VARCHAR(32).
+revision: str = "req_title_1024_20260121"
 down_revision: Union[str, Sequence[str], None] = "ensure_apartment_column"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
