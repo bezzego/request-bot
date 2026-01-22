@@ -44,42 +44,52 @@ class ManagerFilterStates(StatesGroup):
 
 @router.message(F.text == "👥 Управление пользователями")
 async def manager_users(message: Message):
-    await _show_users_page(message, page=1)
+    """Показывает меню выбора фильтра пользователей."""
+    async with async_session() as session:
+        manager = await _get_super_admin(session, message.from_user.id)
+        if not manager:
+            await message.answer("Доступно только супер-администраторам.")
+            return
+    
+    # Создаем меню выбора фильтра
+    builder = InlineKeyboardBuilder()
+    builder.button(text="👥 Все пользователи", callback_data="manager:users_filter:all")
+    builder.button(text="👨‍💼 Специалисты", callback_data="manager:users_filter:specialist")
+    builder.button(text="🔧 Инженеры", callback_data="manager:users_filter:engineer")
+    builder.button(text="👷 Мастера", callback_data="manager:users_filter:master")
+    builder.button(text="👔 Менеджеры", callback_data="manager:users_filter:manager")
+    builder.button(text="👤 Клиенты", callback_data="manager:users_filter:client")
+    builder.button(text="🆕 Новые клиенты", callback_data="manager:users_filter:new_clients")
+    builder.adjust(2)
+    
+    await message.answer(
+        "👥 <b>Управление пользователями</b>\n\n"
+        "Выберите категорию пользователей для просмотра:",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
 
 
-@router.callback_query(F.data.startswith("manager:users_page:"))
-async def manager_users_page(callback: CallbackQuery):
-    """Обработчик пагинации списка пользователей."""
+@router.callback_query(F.data.startswith("manager:users_filter:"))
+async def manager_users_filter(callback: CallbackQuery):
+    """Обработчик фильтрации пользователей по ролям."""
     if not callback.message:
         await callback.answer("Ошибка", show_alert=True)
         return
     
-    # Парсим номер страницы из callback_data
+    # Парсим фильтр из callback_data
     try:
-        # callback_data формат: "manager:users_page:2"
-        parts = callback.data.split(":")
-        if len(parts) < 3:
-            await callback.answer("Ошибка формата", show_alert=True)
-            return
-        page = int(parts[2])
-        if page < 1:
-            await callback.answer("Неверная страница", show_alert=True)
-            return
-    except (ValueError, IndexError) as e:
-        await callback.answer("Ошибка парсинга", show_alert=True)
+        filter_type = callback.data.split(":")[2]
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка формата", show_alert=True)
         return
     
-    # Отвечаем на callback
     await callback.answer()
-    
-    # Используем функцию для показа страницы (она сама проверит доступ)
-    await _show_users_page(callback.message, page=page, edit=True)
+    await _show_users_by_filter(callback.message, filter_type, edit=True)
 
 
-async def _show_users_page(message: Message, page: int = 1, edit: bool = False):
-    """Показывает страницу со списком пользователей с пагинацией."""
-    USERS_PER_PAGE = 20
-    
+async def _show_users_by_filter(message: Message, filter_type: str, edit: bool = False):
+    """Показывает пользователей по выбранному фильтру."""
     # Получаем telegram_id из message
     telegram_id = message.from_user.id if message.from_user else None
     if not telegram_id:
@@ -94,85 +104,87 @@ async def _show_users_page(message: Message, page: int = 1, edit: bool = False):
                 await message.answer("Доступно только супер-администраторам.")
             return
 
-        # Получаем общее количество пользователей
-        total_count_result = await session.execute(
-            select(func.count(User.id))
-        )
-        total_count = total_count_result.scalar() or 0
-
-        if total_count == 0:
-            if edit:
-                await message.edit_text("Пока нет зарегистрированных пользователей.")
-            else:
-                await message.answer("Пока нет зарегистрированных пользователей.")
-            return
-
-        # Вычисляем пагинацию
-        total_pages = (total_count + USERS_PER_PAGE - 1) // USERS_PER_PAGE
-        page = max(1, min(page, total_pages))
-        offset = (page - 1) * USERS_PER_PAGE
-
-        # Загружаем пользователей для текущей страницы
-        users = (
-            (
-                await session.execute(
-                    select(User)
-                    .order_by(User.created_at.desc())
-                    .offset(offset)
-                    .limit(USERS_PER_PAGE)
-                )
+        # Формируем запрос в зависимости от фильтра
+        query = select(User)
+        
+        if filter_type == "all":
+            query = query.order_by(User.created_at.desc())
+            filter_name = "Все пользователи"
+        elif filter_type == "new_clients":
+            # Новые клиенты (зарегистрированные за последние 30 дней)
+            thirty_days_ago = now_moscow() - timedelta(days=30)
+            query = (
+                query
+                .where(User.role == UserRole.CLIENT)
+                .where(User.created_at >= thirty_days_ago)
+                .order_by(User.created_at.desc())
             )
+            filter_name = "Новые клиенты (последние 30 дней)"
+        else:
+            # Фильтр по роли
+            try:
+                role = UserRole(filter_type)
+                query = (
+                    query
+                    .where(User.role == role)
+                    .order_by(User.created_at.desc())
+                )
+                role_names = {
+                    UserRole.SPECIALIST: "Специалисты",
+                    UserRole.ENGINEER: "Инженеры",
+                    UserRole.MASTER: "Мастера",
+                    UserRole.MANAGER: "Менеджеры",
+                    UserRole.CLIENT: "Клиенты",
+                }
+                filter_name = role_names.get(role, filter_type)
+            except ValueError:
+                if not edit:
+                    await message.answer("Неверный фильтр.")
+                return
+
+        # Загружаем пользователей (ограничиваем до 100 для удобства)
+        users = (
+            (await session.execute(query.limit(100)))
             .scalars()
             .all()
         )
 
+    if not users:
+        text = f"👥 <b>{filter_name}</b>\n\nПользователей не найдено."
+        builder = InlineKeyboardBuilder()
+        builder.button(text="⬅️ Назад к фильтрам", callback_data="manager:users_back")
+        builder.adjust(1)
+        
+        if edit:
+            try:
+                await message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+            except Exception:
+                await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+        else:
+            await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+        return
+
     # Создаем кнопки для пользователей
     builder = InlineKeyboardBuilder()
     for user in users:
+        # Ограничиваем длину текста кнопки
+        button_text = f"{user.full_name} · {user.role.value}"
+        if len(button_text) > 60:
+            button_text = button_text[:57] + "..."
         builder.button(
-            text=f"{user.full_name} · {user.role.value}",
+            text=button_text,
             callback_data=f"manager:role:{user.id}",
         )
     
-    # Добавляем кнопки пагинации
-    pagination_buttons = []
-    if total_pages > 1:
-        if page > 1:
-            pagination_buttons.append(
-                builder.button(
-                    text="◀️ Назад",
-                    callback_data=f"manager:users_page:{page - 1}",
-                )
-            )
-        
-        # Показываем номер страницы
-        pagination_buttons.append(
-            builder.button(
-                text=f"{page}/{total_pages}",
-                callback_data="manager:users_noop",
-            )
-        )
-        
-        if page < total_pages:
-            next_page = page + 1
-            # Формируем callback_data явно
-            callback_data = f"manager:users_page:{next_page}"
-            pagination_buttons.append(
-                builder.button(
-                    text="Вперед ▶️",
-                    callback_data=callback_data,
-                )
-            )
+    builder.adjust(1)
     
-    # Размещаем: пользователи по 1 в строке, пагинация в одну строку
-    builder.adjust(1)  # Пользователи по 1 в строке
-    if pagination_buttons:
-        builder.adjust(len(pagination_buttons))  # Кнопки пагинации в одну строку
+    # Добавляем кнопку "Назад к фильтрам"
+    builder.button(text="⬅️ Назад к фильтрам", callback_data="manager:users_back")
+    builder.adjust(1)
 
     text = (
-        f"👥 <b>Управление пользователями</b>\n\n"
-        f"Всего пользователей: {total_count}\n"
-        f"Страница {page} из {total_pages}\n\n"
+        f"👥 <b>{filter_name}</b>\n\n"
+        f"Найдено пользователей: {len(users)}\n\n"
         f"Выберите пользователя, чтобы изменить роль или посмотреть данные."
     )
 
@@ -180,16 +192,13 @@ async def _show_users_page(message: Message, page: int = 1, edit: bool = False):
         try:
             await message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
         except Exception as e:
-            # Если не удалось отредактировать (например, сообщение не изменилось или ошибка), отправляем новое
             error_msg = str(e).lower()
             if "message is not modified" in error_msg or "message to edit not found" in error_msg:
-                # Сообщение не изменилось или не найдено - отправляем новое
                 try:
                     await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
                 except Exception:
                     await message.answer(text, reply_markup=builder.as_markup())
             else:
-                # Другая ошибка - пробуем отправить новое сообщение
                 try:
                     await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
                 except Exception:
@@ -198,10 +207,43 @@ async def _show_users_page(message: Message, page: int = 1, edit: bool = False):
         await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
 
-@router.callback_query(F.data == "manager:users_noop")
-async def manager_users_noop(callback: CallbackQuery):
-    """Пустой обработчик для кнопки номера страницы."""
+@router.callback_query(F.data == "manager:users_back")
+async def manager_users_back(callback: CallbackQuery):
+    """Возвращает к меню выбора фильтра."""
     await callback.answer()
+    
+    async with async_session() as session:
+        manager = await _get_super_admin(session, callback.from_user.id)
+        if not manager:
+            return
+    
+    # Создаем меню выбора фильтра
+    builder = InlineKeyboardBuilder()
+    builder.button(text="👥 Все пользователи", callback_data="manager:users_filter:all")
+    builder.button(text="👨‍💼 Специалисты", callback_data="manager:users_filter:specialist")
+    builder.button(text="🔧 Инженеры", callback_data="manager:users_filter:engineer")
+    builder.button(text="👷 Мастера", callback_data="manager:users_filter:master")
+    builder.button(text="👔 Менеджеры", callback_data="manager:users_filter:manager")
+    builder.button(text="👤 Клиенты", callback_data="manager:users_filter:client")
+    builder.button(text="🆕 Новые клиенты", callback_data="manager:users_filter:new_clients")
+    builder.adjust(2)
+    
+    try:
+        await callback.message.edit_text(
+            "👥 <b>Управление пользователями</b>\n\n"
+            "Выберите категорию пользователей для просмотра:",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML",
+        )
+    except Exception:
+        await callback.message.answer(
+            "👥 <b>Управление пользователями</b>\n\n"
+            "Выберите категорию пользователей для просмотра:",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML",
+        )
+
+
 
 
 @router.callback_query(F.data.startswith("manager:role:"))
@@ -226,7 +268,7 @@ async def manager_pick_role(callback: CallbackQuery):
             callback_data=f"manager:set_role:{user_id}:{role.value}",
         )
     builder.button(text="Отмена", callback_data="manager:cancel_role")
-    builder.button(text="⬅️ Назад к списку", callback_data="manager:users_page:1")
+    builder.button(text="⬅️ Назад к фильтрам", callback_data="manager:users_back")
     builder.adjust(2)
 
     await callback.message.answer(
