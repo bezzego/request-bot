@@ -50,42 +50,45 @@ async def manager_users(message: Message):
 @router.callback_query(F.data.startswith("manager:users_page:"))
 async def manager_users_page(callback: CallbackQuery):
     """Обработчик пагинации списка пользователей."""
-    # Отвечаем на callback сразу, чтобы кнопка реагировала
+    if not callback.message:
+        await callback.answer("Ошибка", show_alert=True)
+        return
+    
+    # Парсим номер страницы из callback_data
+    try:
+        # callback_data формат: "manager:users_page:2"
+        parts = callback.data.split(":")
+        if len(parts) < 3:
+            await callback.answer("Ошибка формата", show_alert=True)
+            return
+        page = int(parts[2])
+        if page < 1:
+            await callback.answer("Неверная страница", show_alert=True)
+            return
+    except (ValueError, IndexError) as e:
+        await callback.answer("Ошибка парсинга", show_alert=True)
+        return
+    
+    # Отвечаем на callback
     await callback.answer()
     
-    if not callback.message:
-        await callback.message.answer("Ошибка: сообщение не найдено.")
-        return
-    
-    try:
-        page = int(callback.data.split(":")[2])
-    except (ValueError, IndexError):
-        await callback.message.answer("Ошибка: неверный номер страницы.")
-        return
-    
-    # Проверяем доступ
-    async with async_session() as session:
-        manager = await _get_super_admin(session, callback.from_user.id)
-        if not manager:
-            await callback.message.answer("Нет доступа.")
-            return
-    
-    # Используем функцию для показа страницы
-    try:
-        await _show_users_page(callback.message, page=page, edit=True)
-    except Exception as e:
-        # Если произошла ошибка, отправляем новое сообщение
-        await callback.message.answer(
-            f"Ошибка при загрузке страницы: {str(e)}. Попробуйте снова."
-        )
+    # Используем функцию для показа страницы (она сама проверит доступ)
+    await _show_users_page(callback.message, page=page, edit=True)
 
 
 async def _show_users_page(message: Message, page: int = 1, edit: bool = False):
     """Показывает страницу со списком пользователей с пагинацией."""
     USERS_PER_PAGE = 20
     
+    # Получаем telegram_id из message
+    telegram_id = message.from_user.id if message.from_user else None
+    if not telegram_id:
+        if not edit:
+            await message.answer("Ошибка: не удалось определить пользователя.")
+        return
+    
     async with async_session() as session:
-        manager = await _get_super_admin(session, message.from_user.id)
+        manager = await _get_super_admin(session, telegram_id)
         if not manager:
             if not edit:
                 await message.answer("Доступно только супер-администраторам.")
@@ -152,10 +155,12 @@ async def _show_users_page(message: Message, page: int = 1, edit: bool = False):
         
         if page < total_pages:
             next_page = page + 1
+            # Формируем callback_data явно
+            callback_data = f"manager:users_page:{next_page}"
             pagination_buttons.append(
                 builder.button(
                     text="Вперед ▶️",
-                    callback_data=f"manager:users_page:{next_page}",
+                    callback_data=callback_data,
                 )
             )
     
