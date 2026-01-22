@@ -50,26 +50,34 @@ async def manager_users(message: Message):
 @router.callback_query(F.data.startswith("manager:users_page:"))
 async def manager_users_page(callback: CallbackQuery):
     """Обработчик пагинации списка пользователей."""
+    # Отвечаем на callback сразу, чтобы кнопка реагировала
+    await callback.answer()
+    
     if not callback.message:
-        await callback.answer("Ошибка: сообщение не найдено.", show_alert=True)
+        await callback.message.answer("Ошибка: сообщение не найдено.")
         return
     
     try:
         page = int(callback.data.split(":")[2])
     except (ValueError, IndexError):
-        await callback.answer("Ошибка: неверный номер страницы.", show_alert=True)
+        await callback.message.answer("Ошибка: неверный номер страницы.")
         return
     
     # Проверяем доступ
     async with async_session() as session:
         manager = await _get_super_admin(session, callback.from_user.id)
         if not manager:
-            await callback.answer("Нет доступа.", show_alert=True)
+            await callback.message.answer("Нет доступа.")
             return
     
     # Используем функцию для показа страницы
-    await _show_users_page(callback.message, page=page, edit=True)
-    await callback.answer()
+    try:
+        await _show_users_page(callback.message, page=page, edit=True)
+    except Exception as e:
+        # Если произошла ошибка, отправляем новое сообщение
+        await callback.message.answer(
+            f"Ошибка при загрузке страницы: {str(e)}. Попробуйте снова."
+        )
 
 
 async def _show_users_page(message: Message, page: int = 1, edit: bool = False):
@@ -123,36 +131,38 @@ async def _show_users_page(message: Message, page: int = 1, edit: bool = False):
             callback_data=f"manager:role:{user.id}",
         )
     
-    # Размещаем кнопки пользователей по 1 в строке
-    builder.adjust(1)
-    
     # Добавляем кнопки пагинации
+    pagination_buttons = []
     if total_pages > 1:
-        pagination_count = 0
         if page > 1:
-            builder.button(
-                text="◀️ Назад",
-                callback_data=f"manager:users_page:{page - 1}",
+            pagination_buttons.append(
+                builder.button(
+                    text="◀️ Назад",
+                    callback_data=f"manager:users_page:{page - 1}",
+                )
             )
-            pagination_count += 1
         
         # Показываем номер страницы
-        builder.button(
-            text=f"{page}/{total_pages}",
-            callback_data="manager:users_noop",
+        pagination_buttons.append(
+            builder.button(
+                text=f"{page}/{total_pages}",
+                callback_data="manager:users_noop",
+            )
         )
-        pagination_count += 1
         
         if page < total_pages:
             next_page = page + 1
-            builder.button(
-                text="Вперед ▶️",
-                callback_data=f"manager:users_page:{next_page}",
+            pagination_buttons.append(
+                builder.button(
+                    text="Вперед ▶️",
+                    callback_data=f"manager:users_page:{next_page}",
+                )
             )
-            pagination_count += 1
-        
-        # Размещаем кнопки пагинации в одну строку
-        builder.adjust(pagination_count)
+    
+    # Размещаем: пользователи по 1 в строке, пагинация в одну строку
+    builder.adjust(1)  # Пользователи по 1 в строке
+    if pagination_buttons:
+        builder.adjust(len(pagination_buttons))  # Кнопки пагинации в одну строку
 
     text = (
         f"👥 <b>Управление пользователями</b>\n\n"
