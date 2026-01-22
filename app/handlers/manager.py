@@ -70,28 +70,72 @@ async def manager_users(message: Message):
     )
 
 
-@router.callback_query(F.data.startswith("manager:users_filter:"))
-async def manager_users_filter(callback: CallbackQuery):
-    """Обработчик фильтрации пользователей по ролям."""
+@router.callback_query(F.data == "manager:users_filter:all")
+async def manager_users_filter_all(callback: CallbackQuery):
+    """Обработчик фильтра 'Все пользователи'."""
+    await _handle_users_filter(callback, "all")
+
+@router.callback_query(F.data == "manager:users_filter:specialist")
+async def manager_users_filter_specialist(callback: CallbackQuery):
+    """Обработчик фильтра 'Специалисты'."""
+    await _handle_users_filter(callback, "specialist")
+
+@router.callback_query(F.data == "manager:users_filter:engineer")
+async def manager_users_filter_engineer(callback: CallbackQuery):
+    """Обработчик фильтра 'Инженеры'."""
+    await _handle_users_filter(callback, "engineer")
+
+@router.callback_query(F.data == "manager:users_filter:master")
+async def manager_users_filter_master(callback: CallbackQuery):
+    """Обработчик фильтра 'Мастера'."""
+    await _handle_users_filter(callback, "master")
+
+@router.callback_query(F.data == "manager:users_filter:manager")
+async def manager_users_filter_manager(callback: CallbackQuery):
+    """Обработчик фильтра 'Менеджеры'."""
+    await _handle_users_filter(callback, "manager")
+
+@router.callback_query(F.data == "manager:users_filter:client")
+async def manager_users_filter_client(callback: CallbackQuery):
+    """Обработчик фильтра 'Клиенты'."""
+    await _handle_users_filter(callback, "client")
+
+@router.callback_query(F.data == "manager:users_filter:new_clients")
+async def manager_users_filter_new_clients(callback: CallbackQuery):
+    """Обработчик фильтра 'Новые клиенты'."""
+    await _handle_users_filter(callback, "new_clients")
+
+
+async def _handle_users_filter(callback: CallbackQuery, filter_type: str):
+    """Общий обработчик для всех фильтров пользователей."""
     if not callback.message:
         await callback.answer("Ошибка", show_alert=True)
         return
     
-    # Парсим фильтр из callback_data
-    try:
-        filter_type = callback.data.split(":")[2]
-    except (ValueError, IndexError):
-        await callback.answer("Ошибка формата", show_alert=True)
-        return
+    # Проверяем доступ
+    async with async_session() as session:
+        manager = await _get_super_admin(session, callback.from_user.id)
+        if not manager:
+            await callback.answer("Нет доступа", show_alert=True)
+            return
     
+    # Отвечаем на callback
     await callback.answer()
-    await _show_users_by_filter(callback.message, filter_type, edit=True)
+    
+    # Используем функцию для показа пользователей
+    try:
+        await _show_users_by_filter(callback.message, filter_type, telegram_id=callback.from_user.id, edit=True)
+    except Exception as e:
+        # В случае ошибки отправляем сообщение
+        await callback.message.answer(f"Ошибка при загрузке пользователей: {str(e)}")
 
 
-async def _show_users_by_filter(message: Message, filter_type: str, edit: bool = False):
+async def _show_users_by_filter(message: Message, filter_type: str, telegram_id: int | None = None, edit: bool = False):
     """Показывает пользователей по выбранному фильтру."""
-    # Получаем telegram_id из message
-    telegram_id = message.from_user.id if message.from_user else None
+    # Получаем telegram_id из message, если не передан
+    if telegram_id is None:
+        telegram_id = message.from_user.id if message.from_user else None
+    
     if not telegram_id:
         if not edit:
             await message.answer("Ошибка: не удалось определить пользователя.")
