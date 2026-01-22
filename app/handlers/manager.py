@@ -50,7 +50,24 @@ async def manager_users(message: Message):
 @router.callback_query(F.data.startswith("manager:users_page:"))
 async def manager_users_page(callback: CallbackQuery):
     """Обработчик пагинации списка пользователей."""
-    page = int(callback.data.split(":")[2])
+    if not callback.message:
+        await callback.answer("Ошибка: сообщение не найдено.", show_alert=True)
+        return
+    
+    try:
+        page = int(callback.data.split(":")[2])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка: неверный номер страницы.", show_alert=True)
+        return
+    
+    # Проверяем доступ
+    async with async_session() as session:
+        manager = await _get_super_admin(session, callback.from_user.id)
+        if not manager:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+    
+    # Используем функцию для показа страницы
     await _show_users_page(callback.message, page=page, edit=True)
     await callback.answer()
 
@@ -127,9 +144,10 @@ async def _show_users_page(message: Message, page: int = 1, edit: bool = False):
         pagination_count += 1
         
         if page < total_pages:
+            next_page = page + 1
             builder.button(
                 text="Вперед ▶️",
-                callback_data=f"manager:users_page:{page + 1}",
+                callback_data=f"manager:users_page:{next_page}",
             )
             pagination_count += 1
         
@@ -145,11 +163,24 @@ async def _show_users_page(message: Message, page: int = 1, edit: bool = False):
 
     if edit:
         try:
-            await message.edit_text(text, reply_markup=builder.as_markup())
-        except Exception:
-            await message.answer(text, reply_markup=builder.as_markup())
+            await message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+        except Exception as e:
+            # Если не удалось отредактировать (например, сообщение не изменилось или ошибка), отправляем новое
+            error_msg = str(e).lower()
+            if "message is not modified" in error_msg or "message to edit not found" in error_msg:
+                # Сообщение не изменилось или не найдено - отправляем новое
+                try:
+                    await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+                except Exception:
+                    await message.answer(text, reply_markup=builder.as_markup())
+            else:
+                # Другая ошибка - пробуем отправить новое сообщение
+                try:
+                    await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+                except Exception:
+                    await message.answer(text, reply_markup=builder.as_markup())
     else:
-        await message.answer(text, reply_markup=builder.as_markup())
+        await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
 
 @router.callback_query(F.data == "manager:users_noop")
