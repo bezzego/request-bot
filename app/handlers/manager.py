@@ -9,7 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.infrastructure.db.models import (
@@ -44,38 +44,118 @@ class ManagerFilterStates(StatesGroup):
 
 @router.message(F.text == "👥 Управление пользователями")
 async def manager_users(message: Message):
+    await _show_users_page(message, page=1)
+
+
+@router.callback_query(F.data.startswith("manager:users_page:"))
+async def manager_users_page(callback: CallbackQuery):
+    """Обработчик пагинации списка пользователей."""
+    page = int(callback.data.split(":")[2])
+    await _show_users_page(callback.message, page=page, edit=True)
+    await callback.answer()
+
+
+async def _show_users_page(message: Message, page: int = 1, edit: bool = False):
+    """Показывает страницу со списком пользователей с пагинацией."""
+    USERS_PER_PAGE = 20
+    
     async with async_session() as session:
         manager = await _get_super_admin(session, message.from_user.id)
         if not manager:
-            await message.answer("Доступно только супер-администраторам.")
+            if not edit:
+                await message.answer("Доступно только супер-администраторам.")
             return
 
+        # Получаем общее количество пользователей
+        total_count_result = await session.execute(
+            select(func.count(User.id))
+        )
+        total_count = total_count_result.scalar() or 0
+
+        if total_count == 0:
+            if edit:
+                await message.edit_text("Пока нет зарегистрированных пользователей.")
+            else:
+                await message.answer("Пока нет зарегистрированных пользователей.")
+            return
+
+        # Вычисляем пагинацию
+        total_pages = (total_count + USERS_PER_PAGE - 1) // USERS_PER_PAGE
+        page = max(1, min(page, total_pages))
+        offset = (page - 1) * USERS_PER_PAGE
+
+        # Загружаем пользователей для текущей страницы
         users = (
             (
                 await session.execute(
-                    select(User).order_by(User.created_at.desc()).limit(30)
+                    select(User)
+                    .order_by(User.created_at.desc())
+                    .offset(offset)
+                    .limit(USERS_PER_PAGE)
                 )
             )
             .scalars()
             .all()
         )
 
-    if not users:
-        await message.answer("Пока нет зарегистрированных пользователей.")
-        return
-
+    # Создаем кнопки для пользователей
     builder = InlineKeyboardBuilder()
     for user in users:
         builder.button(
-            text=f"{user.full_name} · {user.role}",
+            text=f"{user.full_name} · {user.role.value}",
             callback_data=f"manager:role:{user.id}",
         )
+    
+    # Размещаем кнопки пользователей по 1 в строке
     builder.adjust(1)
+    
+    # Добавляем кнопки пагинации
+    if total_pages > 1:
+        pagination_count = 0
+        if page > 1:
+            builder.button(
+                text="◀️ Назад",
+                callback_data=f"manager:users_page:{page - 1}",
+            )
+            pagination_count += 1
+        
+        # Показываем номер страницы
+        builder.button(
+            text=f"{page}/{total_pages}",
+            callback_data="manager:users_noop",
+        )
+        pagination_count += 1
+        
+        if page < total_pages:
+            builder.button(
+                text="Вперед ▶️",
+                callback_data=f"manager:users_page:{page + 1}",
+            )
+            pagination_count += 1
+        
+        # Размещаем кнопки пагинации в одну строку
+        builder.adjust(pagination_count)
 
-    await message.answer(
-        "Выберите пользователя, чтобы изменить роль или посмотреть данные.",
-        reply_markup=builder.as_markup(),
+    text = (
+        f"👥 <b>Управление пользователями</b>\n\n"
+        f"Всего пользователей: {total_count}\n"
+        f"Страница {page} из {total_pages}\n\n"
+        f"Выберите пользователя, чтобы изменить роль или посмотреть данные."
     )
+
+    if edit:
+        try:
+            await message.edit_text(text, reply_markup=builder.as_markup())
+        except Exception:
+            await message.answer(text, reply_markup=builder.as_markup())
+    else:
+        await message.answer(text, reply_markup=builder.as_markup())
+
+
+@router.callback_query(F.data == "manager:users_noop")
+async def manager_users_noop(callback: CallbackQuery):
+    """Пустой обработчик для кнопки номера страницы."""
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("manager:role:"))
@@ -100,10 +180,11 @@ async def manager_pick_role(callback: CallbackQuery):
             callback_data=f"manager:set_role:{user_id}:{role.value}",
         )
     builder.button(text="Отмена", callback_data="manager:cancel_role")
+    builder.button(text="⬅️ Назад к списку", callback_data="manager:users_page:1")
     builder.adjust(2)
 
     await callback.message.answer(
-        f"Текущая роль пользователя {user.full_name}: {user.role}\nВыберите новую роль:",
+        f"Текущая роль пользователя {user.full_name}: {user.role.value}\nВыберите новую роль:",
         reply_markup=builder.as_markup(),
     )
     await callback.answer()
