@@ -5,6 +5,7 @@ import contextlib
 from datetime import datetime
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -125,15 +126,36 @@ class ReminderScheduler:
                             for r in (reminder.recipients or "").split(",")
                             if r.strip()
                         ]
+                        
+                        # Отправляем сообщение всем получателям
+                        all_sent = True
+                        should_mark_sent = True  # Помечаем как отправленное даже при ошибках, чтобы не спамить
+                        
                         for telegram_id in recipients:
                             try:
                                 await self.bot.send_message(chat_id=telegram_id, text=message)
+                            except TelegramForbiddenError:
+                                # Пользователь заблокировал бота - помечаем как отправленное
+                                # чтобы не пытаться отправлять снова
+                                all_sent = False
+                                should_mark_sent = True
+                            except TelegramBadRequest as exc:
+                                # Другие ошибки API (например, неверный chat_id)
+                                # Помечаем как отправленное, чтобы не зацикливаться
+                                all_sent = False
+                                should_mark_sent = True
                             except Exception as exc:  # noqa: BLE001
-                                await self.bot.send_message(
-                                    chat_id=telegram_id,
-                                    text=f"⚠️ Ошибка отправки напоминания: {exc}",
-                                )
-                        await ReminderService.mark_sent(session, reminder.id, payload=message)
+                                # Другие ошибки - не помечаем как отправленное,
+                                # попробуем еще раз в следующем цикле
+                                all_sent = False
+                                should_mark_sent = False
+                        
+                        # Помечаем как отправленное если:
+                        # 1. Все сообщения успешно доставлены
+                        # 2. Получателей нет
+                        # 3. Были критические ошибки (блокировка, неверный chat_id)
+                        if all_sent or not recipients or should_mark_sent:
+                            await ReminderService.mark_sent(session, reminder.id, payload=message)
                     await session.commit()
             except Exception:
                 # Игнорируем ошибки и повторяем цикл через паузу
