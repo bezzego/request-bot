@@ -937,6 +937,7 @@ async def manager_request_detail(callback: CallbackQuery):
                 selectinload(Request.master),
                 selectinload(Request.specialist),
                 selectinload(Request.work_items),
+                selectinload(Request.work_sessions),
                 selectinload(Request.photos),
                 selectinload(Request.acts),
                 selectinload(Request.feedback),
