@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, FSInputFile, Message
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
@@ -26,10 +26,13 @@ from app.services.export import ExportService
 from app.services.reporting import ReportingService
 from app.services.request_service import RequestService
 from app.services.user_service import UserRoleService
+from app.utils.pagination import clamp_page, total_pages_for
 from app.utils.request_formatters import format_request_label
 from app.utils.timezone import now_moscow
 
 router = Router()
+REQUESTS_PAGE_SIZE = 10
+USERS_PAGE_SIZE = 10
 
 
 class ManagerCloseStates(StatesGroup):
@@ -40,6 +43,135 @@ class ManagerCloseStates(StatesGroup):
 class ManagerFilterStates(StatesGroup):
     mode = State()
     value = State()
+
+
+def _manager_filter_conditions(filter_payload: dict[str, str] | None) -> list:
+    if not filter_payload:
+        return []
+    mode = (filter_payload.get("mode") or "").strip().lower()
+    value = (filter_payload.get("value") or "").strip()
+    conditions: list = []
+    if mode == "адрес" and value:
+        conditions.append(func.lower(Request.address).like(f"%{value.lower()}%"))
+    elif mode == "дата":
+        start = filter_payload.get("start")
+        end = filter_payload.get("end")
+        if start and end:
+            try:
+                start_dt = datetime.fromisoformat(start)
+                end_dt = datetime.fromisoformat(end)
+                conditions.append(Request.created_at.between(start_dt, end_dt))
+            except ValueError:
+                pass
+    return conditions
+
+
+async def _fetch_manager_requests_page(
+    session,
+    page: int,
+    filter_payload: dict[str, str] | None = None,
+) -> tuple[list[Request], int, int, int]:
+    conditions = _manager_filter_conditions(filter_payload)
+    total = await session.scalar(select(func.count()).select_from(Request).where(*conditions))
+    total = int(total or 0)
+    total_pages = total_pages_for(total, REQUESTS_PAGE_SIZE)
+    page = clamp_page(page, total_pages)
+    requests = (
+        (
+            await session.execute(
+                select(Request)
+                .options(
+                    selectinload(Request.specialist),
+                    selectinload(Request.engineer),
+                    selectinload(Request.master),
+                )
+                .where(*conditions)
+                .order_by(Request.created_at.desc())
+                .limit(REQUESTS_PAGE_SIZE)
+                .offset(page * REQUESTS_PAGE_SIZE)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return requests, page, total_pages, total
+
+
+async def _show_manager_requests_list(
+    message: Message,
+    session,
+    page: int,
+    *,
+    context: str = "all",
+    filter_payload: dict[str, str] | None = None,
+    edit: bool = False,
+) -> None:
+    requests, page, total_pages, total = await _fetch_manager_requests_page(
+        session,
+        page,
+        filter_payload=filter_payload,
+    )
+
+    if not requests:
+        text = "Заявок по заданному фильтру не найдено." if context == "filter" else "Нет заявок в системе."
+        if edit:
+            await message.edit_text(text)
+        else:
+            await message.answer(text)
+        return
+
+    builder = InlineKeyboardBuilder()
+    start_index = page * REQUESTS_PAGE_SIZE
+    for idx, req in enumerate(requests, start=start_index + 1):
+        status_emoji = (
+            "✅"
+            if req.status.value == "closed"
+            else "🔄"
+            if req.status.value in ["completed", "ready_for_sign"]
+            else "📋"
+        )
+        detail_cb = (
+            f"manager:detail:{req.id}:filter:{page}"
+            if context == "filter"
+            else f"manager:detail:{req.id}:all:{page}"
+        )
+        builder.button(
+            text=f"{idx}. {status_emoji} {format_request_label(req)} · {req.status.value}",
+            callback_data=detail_cb,
+        )
+    builder.adjust(1)
+
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(
+                InlineKeyboardButton(
+                    text="⬅️",
+                    callback_data=f"manager:list:{'filter' if context == 'filter' else 'all'}:{page - 1}",
+                )
+            )
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="manager:noop"))
+        if page < total_pages - 1:
+            nav.append(
+                InlineKeyboardButton(
+                    text="➡️",
+                    callback_data=f"manager:list:{'filter' if context == 'filter' else 'all'}:{page + 1}",
+                )
+            )
+        builder.row(*nav)
+
+    header = (
+        "Результаты фильтрации. Выберите заявку:"
+        if context == "filter"
+        else "📋 <b>Все заявки</b>\n\nВыберите заявку, чтобы посмотреть подробности и закрыть её."
+    )
+    footer = f"\n\nСтраница {page + 1}/{total_pages} · Всего: {total}"
+    text = f"{header}{footer}"
+
+    if edit:
+        await message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+    else:
+        await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
 
 @router.message(F.text == "👥 Управление пользователями")
@@ -106,6 +238,30 @@ async def manager_users_filter_new_clients(callback: CallbackQuery):
     await _handle_users_filter(callback, "new_clients")
 
 
+@router.callback_query(F.data.startswith("manager:users_page:"))
+async def manager_users_page(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    if len(parts) < 4:
+        await callback.answer("Ошибка", show_alert=True)
+        return
+    filter_type = parts[2]
+    try:
+        page = int(parts[3])
+    except ValueError:
+        page = 0
+    await callback.answer()
+    try:
+        await _show_users_by_filter(
+            callback.message,
+            filter_type,
+            telegram_id=callback.from_user.id,
+            page=page,
+            edit=True,
+        )
+    except Exception as e:
+        await callback.message.answer(f"Ошибка при загрузке пользователей: {str(e)}")
+
+
 async def _handle_users_filter(callback: CallbackQuery, filter_type: str):
     """Общий обработчик для всех фильтров пользователей."""
     if not callback.message:
@@ -124,13 +280,25 @@ async def _handle_users_filter(callback: CallbackQuery, filter_type: str):
     
     # Используем функцию для показа пользователей
     try:
-        await _show_users_by_filter(callback.message, filter_type, telegram_id=callback.from_user.id, edit=True)
+        await _show_users_by_filter(
+            callback.message,
+            filter_type,
+            telegram_id=callback.from_user.id,
+            page=0,
+            edit=True,
+        )
     except Exception as e:
         # В случае ошибки отправляем сообщение
         await callback.message.answer(f"Ошибка при загрузке пользователей: {str(e)}")
 
 
-async def _show_users_by_filter(message: Message, filter_type: str, telegram_id: int | None = None, edit: bool = False):
+async def _show_users_by_filter(
+    message: Message,
+    filter_type: str,
+    telegram_id: int | None = None,
+    page: int = 0,
+    edit: bool = False,
+):
     """Показывает пользователей по выбранному фильтру."""
     # Получаем telegram_id из message, если не передан
     if telegram_id is None:
@@ -148,50 +316,45 @@ async def _show_users_by_filter(message: Message, filter_type: str, telegram_id:
                 await message.answer("Доступно только супер-администраторам.")
             return
 
-        # Формируем запрос в зависимости от фильтра
-        query = select(User)
-        
+        conditions = []
         if filter_type == "all":
-            query = query.order_by(User.created_at.desc())
             filter_name = "Все пользователи"
         elif filter_type == "new_clients":
-            # Новые клиенты (зарегистрированные за последние 30 дней)
             thirty_days_ago = now_moscow() - timedelta(days=30)
-            query = (
-                query
-                .where(User.role == UserRole.CLIENT)
-                .where(User.created_at >= thirty_days_ago)
-                .order_by(User.created_at.desc())
-            )
+            conditions.append(User.role == UserRole.CLIENT)
+            conditions.append(User.created_at >= thirty_days_ago)
             filter_name = "Новые клиенты (последние 30 дней)"
         else:
-            # Фильтр по роли
             try:
                 role = UserRole(filter_type)
-                query = (
-                    query
-                    .where(User.role == role)
-                    .order_by(User.created_at.desc())
-                )
-                role_names = {
-                    UserRole.SPECIALIST: "Специалисты",
-                    UserRole.ENGINEER: "Инженеры",
-                    UserRole.MASTER: "Мастера",
-                    UserRole.MANAGER: "Менеджеры",
-                    UserRole.CLIENT: "Клиенты",
-                }
-                filter_name = role_names.get(role, filter_type)
             except ValueError:
                 if not edit:
                     await message.answer("Неверный фильтр.")
                 return
+            conditions.append(User.role == role)
+            role_names = {
+                UserRole.SPECIALIST: "Специалисты",
+                UserRole.ENGINEER: "Инженеры",
+                UserRole.MASTER: "Мастера",
+                UserRole.MANAGER: "Менеджеры",
+                UserRole.CLIENT: "Клиенты",
+            }
+            filter_name = role_names.get(role, filter_type)
 
-        # Загружаем пользователей (ограничиваем до 100 для удобства)
-        users = (
-            (await session.execute(query.limit(100)))
-            .scalars()
-            .all()
+        total = await session.scalar(select(func.count()).select_from(User).where(*conditions))
+        total = int(total or 0)
+        total_pages = total_pages_for(total, USERS_PAGE_SIZE)
+        page = clamp_page(page, total_pages)
+
+        query = (
+            select(User)
+            .where(*conditions)
+            .order_by(User.created_at.desc())
+            .limit(USERS_PAGE_SIZE)
+            .offset(page * USERS_PAGE_SIZE)
         )
+
+        users = (await session.execute(query)).scalars().all()
 
     if not users:
         text = f"👥 <b>{filter_name}</b>\n\nПользователей не найдено."
@@ -210,9 +373,10 @@ async def _show_users_by_filter(message: Message, filter_type: str, telegram_id:
 
     # Создаем кнопки для пользователей
     builder = InlineKeyboardBuilder()
-    for user in users:
+    start_index = page * USERS_PAGE_SIZE
+    for idx, user in enumerate(users, start=start_index + 1):
         # Ограничиваем длину текста кнопки
-        button_text = f"{user.full_name} · {user.role.value}"
+        button_text = f"{idx}. {user.full_name} · {user.role.value}"
         if len(button_text) > 60:
             button_text = button_text[:57] + "..."
         builder.button(
@@ -222,14 +386,33 @@ async def _show_users_by_filter(message: Message, filter_type: str, telegram_id:
     
     builder.adjust(1)
     
-    # Добавляем кнопку "Назад к фильтрам"
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(
+                InlineKeyboardButton(
+                    text="⬅️",
+                    callback_data=f"manager:users_page:{filter_type}:{page - 1}",
+                )
+            )
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="manager:noop"))
+        if page < total_pages - 1:
+            nav.append(
+                InlineKeyboardButton(
+                    text="➡️",
+                    callback_data=f"manager:users_page:{filter_type}:{page + 1}",
+                )
+            )
+        builder.row(*nav)
+
     builder.button(text="⬅️ Назад к фильтрам", callback_data="manager:users_back")
     builder.adjust(1)
 
     text = (
         f"👥 <b>{filter_name}</b>\n\n"
-        f"Найдено пользователей: {len(users)}\n\n"
-        f"Выберите пользователя, чтобы изменить роль или посмотреть данные."
+        f"Найдено пользователей: {total}\n\n"
+        f"Выберите пользователя, чтобы изменить роль или посмотреть данные.\n"
+        f"\nСтраница {page + 1}/{total_pages}"
     )
 
     if edit:
@@ -411,34 +594,19 @@ async def manager_reports(message: Message):
 @router.message(F.text == "📋 Мои заявки")
 async def manager_my_requests(message: Message):
     """Обработчик для просмотра заявок суперадмина (использует функции специалиста)."""
-    from app.handlers.specialist import _get_specialist, _load_specialist_requests
+    from app.handlers.specialist import _get_specialist, _show_specialist_requests_list
     
     async with async_session() as session:
         specialist_or_admin = await _get_specialist(session, message.from_user.id)
         if not specialist_or_admin:
             await message.answer("Эта функция доступна только специалистам отдела и суперадминам.")
             return
-
-        requests = await _load_specialist_requests(session, specialist_or_admin.id)
-
-    if not requests:
-        await message.answer("У вас пока нет заявок. Создайте первую через «➕ Создать заявку».")
-        return
-
-    from aiogram.utils.keyboard import InlineKeyboardBuilder
-    builder = InlineKeyboardBuilder()
-    for req in requests:
-        status = req.status.value
-        builder.button(
-            text=f"{format_request_label(req)} · {status}",
-            callback_data=f"spec:detail:{req.id}",
+        await _show_specialist_requests_list(
+            message,
+            session,
+            specialist_or_admin.id,
+            page=0,
         )
-    builder.adjust(1)
-
-    await message.answer(
-        "Выберите заявку, чтобы посмотреть подробности и актуальный статус.",
-        reply_markup=builder.as_markup(),
-    )
 
 
 @router.message(F.text == "📋 Все заявки")
@@ -449,41 +617,38 @@ async def manager_all_requests(message: Message):
             await message.answer("Доступ ограничен.")
             return
 
-        requests = (
-            (
-                await session.execute(
-                    select(Request)
-                    .options(
-                        selectinload(Request.specialist),
-                        selectinload(Request.engineer),
-                        selectinload(Request.master),
-                    )
-                    .order_by(Request.created_at.desc())
-                    .limit(30)
-                )
-            )
-            .scalars()
-            .all()
-        )
+        await _show_manager_requests_list(message, session, page=0, context="all")
 
-    if not requests:
-        await message.answer("Нет заявок в системе.")
+
+@router.callback_query(F.data.startswith("manager:list:"))
+async def manager_requests_page(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split(":")
+    if len(parts) < 4:
+        await callback.answer("Ошибка", show_alert=True)
         return
-
-    builder = InlineKeyboardBuilder()
-    for req in requests:
-        status_emoji = "✅" if req.status.value == "closed" else "🔄" if req.status.value in ["completed", "ready_for_sign"] else "📋"
-        builder.button(
-            text=f"{status_emoji} {format_request_label(req)} · {req.status.value}",
-            callback_data=f"manager:detail:{req.id}",
+    context = parts[2]
+    try:
+        page = int(parts[3])
+    except ValueError:
+        page = 0
+    filter_payload = None
+    if context == "filter":
+        data = await state.get_data()
+        filter_payload = data.get("manager_filter")
+    async with async_session() as session:
+        manager = await _get_super_admin(session, callback.from_user.id)
+        if not manager:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        await _show_manager_requests_list(
+            callback.message,
+            session,
+            page=page,
+            context=context,
+            filter_payload=filter_payload,
+            edit=True,
         )
-    builder.adjust(1)
-
-    await message.answer(
-        "📋 <b>Последние 30 заявок</b>\n\n"
-        "Выберите заявку, чтобы посмотреть подробности и закрыть её.",
-        reply_markup=builder.as_markup(),
-    )
+    await callback.answer()
 
 
 @router.message(F.text == "🔍 Фильтр заявок")
@@ -524,18 +689,10 @@ async def manager_filter_apply(message: Message, state: FSMContext):
             await message.answer("Доступ ограничен.")
             return
 
-        query = (
-            select(Request)
-            .options(
-                selectinload(Request.specialist),
-                selectinload(Request.engineer),
-                selectinload(Request.master),
-            )
-            .order_by(Request.created_at.desc())
-        )
+        filter_payload: dict[str, str] = {"mode": mode or "", "value": value}
 
         if mode == "адрес":
-            query = query.where(func.lower(Request.address).like(f"%{value.lower()}%"))
+            filter_payload["value"] = value
         elif mode == "дата":
             try:
                 start_str, end_str = [p.strip() for p in value.split("-", 1)]
@@ -545,33 +702,19 @@ async def manager_filter_apply(message: Message, state: FSMContext):
             except Exception:
                 await message.answer("Неверный формат. Используйте ДД.ММ.ГГГГ-ДД.ММ.ГГГГ.")
                 return
-            query = query.where(Request.created_at.between(start, end))
+            filter_payload["start"] = start.isoformat()
+            filter_payload["end"] = end.isoformat()
 
-        requests = (
-            (await session.execute(query.limit(50)))
-            .scalars()
-            .all()
+        await state.update_data(manager_filter=filter_payload)
+        await state.set_state(None)
+
+        await _show_manager_requests_list(
+            message,
+            session,
+            page=0,
+            context="filter",
+            filter_payload=filter_payload,
         )
-
-    await state.clear()
-
-    if not requests:
-        await message.answer("Заявок по заданному фильтру не найдено.")
-        return
-
-    builder = InlineKeyboardBuilder()
-    for req in requests:
-        status_emoji = "✅" if req.status.value == "closed" else "🔄" if req.status.value in ["completed", "ready_for_sign"] else "📋"
-        builder.button(
-            text=f"{status_emoji} {format_request_label(req)} · {req.status.value}",
-            callback_data=f"manager:detail:{req.id}",
-        )
-    builder.adjust(1)
-
-    await message.answer(
-        "Результаты фильтрации. Выберите заявку:",
-        reply_markup=builder.as_markup(),
-    )
 
 
 @router.message(F.text == "📤 Экспорт Excel")
@@ -621,8 +764,18 @@ async def manager_export(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("manager:detail:"))
 async def manager_request_detail(callback: CallbackQuery):
     """Показывает детали заявки для суперадмина с возможностью закрытия."""
-    _, _, request_id_str = callback.data.split(":")
-    request_id = int(request_id_str)
+    parts = callback.data.split(":")
+    request_id = int(parts[2])
+    context = "all"
+    page = 0
+    if len(parts) >= 4:
+        if parts[3] in {"all", "filter"}:
+            context = parts[3]
+        if len(parts) >= 5:
+            try:
+                page = int(parts[4])
+            except ValueError:
+                page = 0
     
     async with async_session() as session:
         manager = await _get_super_admin(session, callback.from_user.id)
@@ -699,8 +852,10 @@ async def manager_request_detail(callback: CallbackQuery):
                 callback_data=f"manager:close_info:{request.id}",
             )
         
-        builder.button(text="⬅️ Назад к списку", callback_data="manager:back_to_list")
-        builder.button(text="🔄 Обновить", callback_data=f"manager:detail:{request.id}")
+        back_cb = f"manager:list:{context}:{page}"
+        refresh_cb = f"manager:detail:{request.id}:{context}:{page}"
+        builder.button(text="⬅️ Назад к списку", callback_data=back_cb)
+        builder.button(text="🔄 Обновить", callback_data=refresh_cb)
         builder.adjust(1)
         
         try:
@@ -960,43 +1115,14 @@ async def manager_back_to_list(callback: CallbackQuery):
         if not manager:
             await callback.answer("Нет доступа.", show_alert=True)
             return
-        
-        requests = (
-            (
-                await session.execute(
-                    select(Request)
-                    .options(
-                        selectinload(Request.specialist),
-                        selectinload(Request.engineer),
-                        selectinload(Request.master),
-                    )
-                    .order_by(Request.created_at.desc())
-                    .limit(30)
-                )
-            )
-            .scalars()
-            .all()
+
+        await _show_manager_requests_list(
+            callback.message,
+            session,
+            page=0,
+            context="all",
+            edit=True,
         )
-    
-    if not requests:
-        await callback.message.edit_text("Нет заявок в системе.")
-        await callback.answer()
-        return
-    
-    builder = InlineKeyboardBuilder()
-    for req in requests:
-        status_emoji = "✅" if req.status.value == "closed" else "🔄" if req.status.value in ["completed", "ready_for_sign"] else "📋"
-        builder.button(
-            text=f"{status_emoji} {format_request_label(req)} · {req.status.value}",
-            callback_data=f"manager:detail:{req.id}",
-        )
-    builder.adjust(1)
-    
-    await callback.message.edit_text(
-        "📋 <b>Последние 30 заявок</b>\n\n"
-        "Выберите заявку, чтобы посмотреть подробности и закрыть её.",
-        reply_markup=builder.as_markup(),
-    )
     await callback.answer()
 
 

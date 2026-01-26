@@ -4,13 +4,14 @@ from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.infrastructure.db.models import Feedback, Request, RequestStatus, User, UserRole
 from app.infrastructure.db.session import async_session
+from app.utils.pagination import clamp_page, total_pages_for
 from app.utils.request_formatters import format_request_label
 from app.utils.timezone import format_moscow
 
@@ -35,6 +36,143 @@ STATUS_TITLES = {
     RequestStatus.CLOSED: "Закрыта",
     RequestStatus.CANCELLED: "Отменена",
 }
+REQUESTS_PAGE_SIZE = 10
+
+
+async def _fetch_client_requests_page(
+    session,
+    client_id: int,
+    page: int,
+    status_filter: set[RequestStatus] | None = None,
+) -> tuple[list[Request], int, int, int]:
+    conditions = [Request.customer_id == client_id]
+    if status_filter:
+        conditions.append(Request.status.in_(status_filter))
+    total = await session.scalar(select(func.count()).select_from(Request).where(*conditions))
+    total = int(total or 0)
+    total_pages = total_pages_for(total, REQUESTS_PAGE_SIZE)
+    page = clamp_page(page, total_pages)
+    requests = (
+        (
+            await session.execute(
+                select(Request)
+                .options(
+                    selectinload(Request.engineer),
+                    selectinload(Request.master),
+                )
+                .where(*conditions)
+                .order_by(Request.created_at.desc())
+                .limit(REQUESTS_PAGE_SIZE)
+                .offset(page * REQUESTS_PAGE_SIZE)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return requests, page, total_pages, total
+
+
+async def _show_client_requests_list(
+    message: Message,
+    session,
+    client_id: int,
+    page: int,
+    *,
+    edit: bool = False,
+) -> None:
+    requests, page, total_pages, total = await _fetch_client_requests_page(session, client_id, page)
+    if not requests:
+        text = "Для вас пока нет заявок. Свяжитесь со специалистом."
+        if edit:
+            await message.edit_text(text)
+        else:
+            await message.answer(text)
+        return
+
+    builder = InlineKeyboardBuilder()
+    start_index = page * REQUESTS_PAGE_SIZE
+    for idx, req in enumerate(requests, start=start_index + 1):
+        status = STATUS_TITLES.get(req.status, req.status.value)
+        builder.button(
+            text=f"{idx}. {format_request_label(req)} · {status}",
+            callback_data=f"client:detail:{req.id}:{page}",
+        )
+    builder.adjust(1)
+
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"client:list:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="client:noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"client:list:{page + 1}"))
+        builder.row(*nav)
+
+    text = (
+        "Выберите заявку, чтобы посмотреть статус и сроки."
+        f"\n\nСтраница {page + 1}/{total_pages} · Всего: {total}"
+    )
+
+    if edit:
+        await message.edit_text(text, reply_markup=builder.as_markup())
+    else:
+        await message.answer(text, reply_markup=builder.as_markup())
+
+
+async def _show_client_feedback_list(
+    message: Message,
+    session,
+    client_id: int,
+    page: int,
+    *,
+    edit: bool = False,
+) -> None:
+    eligible_statuses = {
+        RequestStatus.COMPLETED,
+        RequestStatus.READY_FOR_SIGN,
+        RequestStatus.CLOSED,
+    }
+    requests, page, total_pages, total = await _fetch_client_requests_page(
+        session,
+        client_id,
+        page,
+        status_filter=eligible_statuses,
+    )
+    if not requests:
+        text = "Нет заявок, доступных для оценки."
+        if edit:
+            await message.edit_text(text)
+        else:
+            await message.answer(text)
+        return
+
+    builder = InlineKeyboardBuilder()
+    start_index = page * REQUESTS_PAGE_SIZE
+    for idx, req in enumerate(requests, start=start_index + 1):
+        builder.button(
+            text=f"{idx}. {format_request_label(req)} · {req.title}",
+            callback_data=f"client:feedback:{req.id}:{page}",
+        )
+    builder.adjust(1)
+
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"client:feedback_list:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="client:noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"client:feedback_list:{page + 1}"))
+        builder.row(*nav)
+
+    text = (
+        "Выберите заявку, чтобы оставить отзыв о качестве работ."
+        f"\n\nСтраница {page + 1}/{total_pages} · Всего: {total}"
+    )
+
+    if edit:
+        await message.edit_text(text, reply_markup=builder.as_markup())
+    else:
+        await message.answer(text, reply_markup=builder.as_markup())
 
 
 @router.message(F.text == "📋 Мои заявки")
@@ -45,30 +183,66 @@ async def client_requests(message: Message):
             await message.answer("Доступно только заказчикам.")
             return
 
-        requests = await _load_client_requests(session, client.id)
+        await _show_client_requests_list(message, session, client.id, page=0)
 
-    if not requests:
-        await message.answer("Для вас пока нет заявок. Свяжитесь со специалистом.")
-        return
 
-    builder = InlineKeyboardBuilder()
-    for req in requests:
-        status = STATUS_TITLES.get(req.status, req.status.value)
-        builder.button(
-            text=f"{format_request_label(req)} · {status}",
-            callback_data=f"client:detail:{req.id}",
+@router.callback_query(F.data.startswith("client:list:"))
+async def client_requests_page(callback: CallbackQuery):
+    try:
+        page = int(callback.data.split(":")[2])
+    except (ValueError, IndexError):
+        page = 0
+    async with async_session() as session:
+        client = await _get_client(session, callback.from_user.id)
+        if not client:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        await _show_client_requests_list(
+            callback.message,
+            session,
+            client.id,
+            page=page,
+            edit=True,
         )
-    builder.adjust(1)
+    await callback.answer()
 
-    await message.answer(
-        "Выберите заявку, чтобы посмотреть статус и сроки.",
-        reply_markup=builder.as_markup(),
-    )
+
+@router.callback_query(F.data.startswith("client:feedback_list:"))
+async def client_feedback_list_page(callback: CallbackQuery):
+    try:
+        page = int(callback.data.split(":")[2])
+    except (ValueError, IndexError):
+        page = 0
+    async with async_session() as session:
+        client = await _get_client(session, callback.from_user.id)
+        if not client:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        await _show_client_feedback_list(
+            callback.message,
+            session,
+            client.id,
+            page=page,
+            edit=True,
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "client:noop")
+async def client_noop(callback: CallbackQuery):
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("client:detail:"))
 async def client_request_detail(callback: CallbackQuery):
-    request_id = int(callback.data.split(":")[2])
+    parts = callback.data.split(":")
+    request_id = int(parts[2])
+    page = 0
+    if len(parts) >= 4:
+        try:
+            page = int(parts[3])
+        except ValueError:
+            page = 0
     async with async_session() as session:
         client = await _get_client(session, callback.from_user.id)
         if not client:
@@ -82,37 +256,31 @@ async def client_request_detail(callback: CallbackQuery):
         await callback.answer()
         return
 
-    await _show_request_detail(callback.message, request, edit=True)
+    await _show_request_detail(callback.message, request, edit=True, list_page=page)
     await callback.answer()
 
 
-@router.callback_query(F.data == "client:back")
+@router.callback_query(F.data.startswith("client:back"))
 async def client_back(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    page = 0
+    if len(parts) >= 3:
+        try:
+            page = int(parts[2])
+        except ValueError:
+            page = 0
     async with async_session() as session:
         client = await _get_client(session, callback.from_user.id)
         if not client:
             await callback.answer("Нет доступа.", show_alert=True)
             return
-
-        requests = await _load_client_requests(session, client.id)
-
-    if not requests:
-        await callback.message.edit_text("Для вас пока нет заявок.")
-        await callback.answer()
-        return
-
-    builder = InlineKeyboardBuilder()
-    for req in requests:
-        builder.button(
-            text=f"{format_request_label(req)} · {STATUS_TITLES.get(req.status, req.status.value)}",
-            callback_data=f"client:detail:{req.id}",
+        await _show_client_requests_list(
+            callback.message,
+            session,
+            client.id,
+            page=page,
+            edit=True,
         )
-    builder.adjust(1)
-
-    await callback.message.edit_text(
-        "Выберите заявку, чтобы посмотреть статус.",
-        reply_markup=builder.as_markup(),
-    )
     await callback.answer()
 
 
@@ -124,30 +292,7 @@ async def client_feedback_list(message: Message):
             await message.answer("Доступно только заказчикам.")
             return
 
-        requests = await _load_client_requests(session, client.id)
-
-    eligible = [
-        req
-        for req in requests
-        if req.status in {RequestStatus.COMPLETED, RequestStatus.READY_FOR_SIGN, RequestStatus.CLOSED}
-    ]
-
-    if not eligible:
-        await message.answer("Нет заявок, доступных для оценки.")
-        return
-
-    builder = InlineKeyboardBuilder()
-    for req in eligible:
-        builder.button(
-            text=f"{format_request_label(req)} · {req.title}",
-            callback_data=f"client:feedback:{req.id}",
-        )
-    builder.adjust(1)
-
-    await message.answer(
-        "Выберите заявку, чтобы оставить отзыв о качестве работ.",
-        reply_markup=builder.as_markup(),
-    )
+        await _show_client_feedback_list(message, session, client.id, page=0)
 
 
 @router.callback_query(F.data.startswith("client:feedback:"))
@@ -351,10 +496,16 @@ def _rating_keyboard(stage: str):
     return builder.as_markup()
 
 
-async def _show_request_detail(message: Message, request: Request, *, edit: bool = False) -> None:
+async def _show_request_detail(
+    message: Message,
+    request: Request,
+    *,
+    edit: bool = False,
+    list_page: int = 0,
+) -> None:
     text = _format_request_detail(request)
     builder = InlineKeyboardBuilder()
-    builder.button(text="⬅️ Назад", callback_data="client:back")
+    builder.button(text="⬅️ Назад", callback_data=f"client:list:{list_page}")
     builder.adjust(1)
     try:
         if edit:

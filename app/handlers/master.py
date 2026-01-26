@@ -8,7 +8,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InputMediaPhoto, InputMediaVideo, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
@@ -34,6 +34,7 @@ from app.infrastructure.db.session import async_session
 from app.keyboards.master_kb import finish_photo_kb, master_kb
 from app.services.request_service import RequestService
 from app.services.work_catalog import get_work_catalog
+from app.utils.pagination import clamp_page, total_pages_for
 from app.utils.request_formatters import format_request_label
 from app.utils.timezone import format_moscow, now_moscow
 from app.keyboards.calendar import build_calendar, parse_calendar_callback, shift_month
@@ -41,6 +42,7 @@ from app.keyboards.calendar import build_calendar, parse_calendar_callback, shif
 logger = logging.getLogger(__name__)
 
 router = Router()
+REQUESTS_PAGE_SIZE = 10
 
 
 class MasterStates(StatesGroup):
@@ -71,6 +73,87 @@ STATUS_TITLES = {
 }
 
 
+async def _fetch_master_requests_page(
+    session,
+    master_id: int,
+    page: int,
+) -> tuple[list[Request], int, int, int]:
+    conditions = [Request.master_id == master_id]
+    total = await session.scalar(select(func.count()).select_from(Request).where(*conditions))
+    total = int(total or 0)
+    total_pages = total_pages_for(total, REQUESTS_PAGE_SIZE)
+    page = clamp_page(page, total_pages)
+    requests = (
+        (
+            await session.execute(
+                select(Request)
+                .options(
+                    selectinload(Request.object),
+                    selectinload(Request.contract),
+                    selectinload(Request.work_items),
+                    selectinload(Request.work_sessions),
+                    selectinload(Request.photos),
+                    selectinload(Request.engineer),
+                )
+                .where(*conditions)
+                .order_by(Request.created_at.desc())
+                .limit(REQUESTS_PAGE_SIZE)
+                .offset(page * REQUESTS_PAGE_SIZE)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return requests, page, total_pages, total
+
+
+async def _show_master_requests_list(
+    message: Message,
+    session,
+    master_id: int,
+    page: int,
+    *,
+    edit: bool = False,
+) -> None:
+    requests, page, total_pages, total = await _fetch_master_requests_page(session, master_id, page)
+
+    if not requests:
+        text = "У вас пока нет назначенных заявок. Ожидайте задач от инженера."
+        if edit:
+            await message.edit_text(text)
+        else:
+            await message.answer(text)
+        return
+
+    builder = InlineKeyboardBuilder()
+    start_index = page * REQUESTS_PAGE_SIZE
+    for idx, req in enumerate(requests, start=start_index + 1):
+        builder.button(
+            text=f"{idx}. {format_request_label(req)} · {STATUS_TITLES.get(req.status, req.status.value)}",
+            callback_data=f"master:detail:{req.id}:{page}",
+        )
+    builder.adjust(1)
+
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"master:list:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="master:noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"master:list:{page + 1}"))
+        builder.row(*nav)
+
+    text = (
+        "Выберите заявку, чтобы зафиксировать работу и фотоотчёт."
+        f"\n\nСтраница {page + 1}/{total_pages} · Всего: {total}"
+    )
+
+    if edit:
+        await message.edit_text(text, reply_markup=builder.as_markup())
+    else:
+        await message.answer(text, reply_markup=builder.as_markup())
+
+
 @router.message(F.text == "📥 Мои заявки")
 async def master_requests(message: Message):
     async with async_session() as session:
@@ -79,29 +162,45 @@ async def master_requests(message: Message):
             await message.answer("Эта функция доступна только мастерам.")
             return
 
-        requests = await _load_master_requests(session, master.id)
+        await _show_master_requests_list(message, session, master.id, page=0)
 
-    if not requests:
-        await message.answer("У вас пока нет назначенных заявок. Ожидайте задач от инженера.")
-        return
 
-    builder = InlineKeyboardBuilder()
-    for req in requests:
-        builder.button(
-            text=f"{format_request_label(req)} · {STATUS_TITLES.get(req.status, req.status.value)}",
-            callback_data=f"master:detail:{req.id}",
+@router.callback_query(F.data.startswith("master:list:"))
+async def master_requests_page(callback: CallbackQuery):
+    try:
+        page = int(callback.data.split(":")[2])
+    except (ValueError, IndexError):
+        page = 0
+    async with async_session() as session:
+        master = await _get_master(session, callback.from_user.id)
+        if not master:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        await _show_master_requests_list(
+            callback.message,
+            session,
+            master.id,
+            page=page,
+            edit=True,
         )
-    builder.adjust(1)
+    await callback.answer()
 
-    await message.answer(
-        "Выберите заявку, чтобы зафиксировать работу и фотоотчёт.",
-        reply_markup=builder.as_markup(),
-    )
+
+@router.callback_query(F.data == "master:noop")
+async def master_noop(callback: CallbackQuery):
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("master:detail:"))
 async def master_request_detail(callback: CallbackQuery):
-    request_id = int(callback.data.split(":")[2])
+    parts = callback.data.split(":")
+    request_id = int(parts[2])
+    page = 0
+    if len(parts) >= 4:
+        try:
+            page = int(parts[3])
+        except ValueError:
+            page = 0
     async with async_session() as session:
         master = await _get_master(session, callback.from_user.id)
         if not master:
@@ -115,37 +214,31 @@ async def master_request_detail(callback: CallbackQuery):
         await callback.answer()
         return
 
-    await _show_request_detail(callback.message, request, edit=True)
+    await _show_request_detail(callback.message, request, edit=True, list_page=page)
     await callback.answer()
 
 
-@router.callback_query(F.data == "master:back")
+@router.callback_query(F.data.startswith("master:back"))
 async def master_back_to_list(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    page = 0
+    if len(parts) >= 3:
+        try:
+            page = int(parts[2])
+        except ValueError:
+            page = 0
     async with async_session() as session:
         master = await _get_master(session, callback.from_user.id)
         if not master:
             await callback.answer("Нет доступа.", show_alert=True)
             return
-
-        requests = await _load_master_requests(session, master.id)
-
-    if not requests:
-        await callback.message.edit_text("Нет активных заявок. Ожидайте новых задач.")
-        await callback.answer()
-        return
-
-    builder = InlineKeyboardBuilder()
-    for req in requests:
-        builder.button(
-            text=f"{format_request_label(req)} · {STATUS_TITLES.get(req.status, req.status.value)}",
-            callback_data=f"master:detail:{req.id}",
+        await _show_master_requests_list(
+            callback.message,
+            session,
+            master.id,
+            page=page,
+            edit=True,
         )
-    builder.adjust(1)
-
-    await callback.message.edit_text(
-        "Выберите заявку, чтобы зафиксировать работу и фотоотчёт.",
-        reply_markup=builder.as_markup(),
-    )
     await callback.answer()
 
 
@@ -2188,9 +2281,15 @@ async def _refresh_request_detail(bot, chat_id: int, master_telegram_id: int, re
         pass
 
 
-async def _show_request_detail(message: Message, request: Request, *, edit: bool = False) -> None:
+async def _show_request_detail(
+    message: Message,
+    request: Request,
+    *,
+    edit: bool = False,
+    list_page: int = 0,
+) -> None:
     text = _format_request_detail(request)
-    keyboard = _detail_keyboard(request.id, request)
+    keyboard = _detail_keyboard(request.id, request, list_page=list_page)
     try:
         if edit:
             await message.edit_text(text, reply_markup=keyboard)
@@ -2200,7 +2299,12 @@ async def _show_request_detail(message: Message, request: Request, *, edit: bool
         await message.answer(text, reply_markup=keyboard)
 
 
-def _detail_keyboard(request_id: int, request: Request | None = None) -> InlineKeyboardBuilder:
+def _detail_keyboard(
+    request_id: int,
+    request: Request | None = None,
+    *,
+    list_page: int = 0,
+) -> InlineKeyboardBuilder:
     """Создает клавиатуру для деталей заявки мастера."""
     builder = InlineKeyboardBuilder()
     builder.button(text="📷 Посмотреть дефекты", callback_data=f"master:view_defects:{request_id}")
@@ -2225,7 +2329,7 @@ def _detail_keyboard(request_id: int, request: Request | None = None) -> InlineK
     builder.button(text="⏹ Завершить работу", callback_data=f"master:finish:{request_id}")
     builder.button(text="✏️ Обновить факт", callback_data=f"master:update_fact:{request_id}")
     builder.button(text="📦 Редактировать материалы", callback_data=f"master:edit_materials:{request_id}")
-    builder.button(text="⬅️ Назад к списку", callback_data="master:back")
+    builder.button(text="⬅️ Назад к списку", callback_data=f"master:list:{list_page}")
     builder.adjust(1)
     return builder.as_markup()
 

@@ -28,12 +28,14 @@ from app.infrastructure.db.models import (
 from app.infrastructure.db.session import async_session
 from app.keyboards.calendar import build_calendar, parse_calendar_callback, shift_month
 from app.services.request_service import RequestCreateData, RequestService
+from app.utils.pagination import clamp_page, total_pages_for
 from app.utils.request_formatters import format_request_label
 from app.utils.timezone import combine_moscow, format_moscow, now_moscow
 
 router = Router()
 
 SPEC_CALENDAR_PREFIX = "spec_inspection"
+REQUESTS_PAGE_SIZE = 10
 
 
 async def _get_specialist(session, telegram_id: int) -> User | None:
@@ -186,25 +188,53 @@ async def specialist_requests(message: Message):
             await message.answer("Эта функция доступна только специалистам отдела и суперадминам.")
             return
 
-        requests = await _load_specialist_requests(session, specialist.id)
+        await _show_specialist_requests_list(message, session, specialist.id, page=0)
 
-    if not requests:
-        await message.answer("У вас пока нет заявок. Создайте первую через «➕ Создать заявку».")
-        return
 
-    builder = InlineKeyboardBuilder()
-    for req in requests:
-        status = req.status.value
-        builder.button(
-            text=f"{format_request_label(req)} · {status}",
-            callback_data=f"spec:detail:{req.id}",
+@router.callback_query(F.data.startswith("spec:list:"))
+async def specialist_requests_page(callback: CallbackQuery):
+    try:
+        page = int(callback.data.split(":")[2])
+    except (ValueError, IndexError):
+        page = 0
+    async with async_session() as session:
+        specialist = await _get_specialist(session, callback.from_user.id)
+        if not specialist:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        await _show_specialist_requests_list(
+            callback.message,
+            session,
+            specialist.id,
+            page=page,
+            edit=True,
         )
-    builder.adjust(1)
+    await callback.answer()
 
-    await message.answer(
-        "Выберите заявку, чтобы посмотреть подробности и актуальный статус.",
-        reply_markup=builder.as_markup(),
-    )
+
+@router.callback_query(F.data.startswith("spec:filter:"))
+async def specialist_filter_page(callback: CallbackQuery, state: FSMContext):
+    try:
+        page = int(callback.data.split(":")[2])
+    except (ValueError, IndexError):
+        page = 0
+    data = await state.get_data()
+    filter_payload = data.get("spec_filter")
+    async with async_session() as session:
+        specialist = await _get_specialist(session, callback.from_user.id)
+        if not specialist:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        await _show_specialist_requests_list(
+            callback.message,
+            session,
+            specialist.id,
+            page=page,
+            context="filter",
+            filter_payload=filter_payload,
+            edit=True,
+        )
+    await callback.answer()
 
 
 @router.message(F.text == "🔍 Фильтр заявок")
@@ -245,18 +275,9 @@ async def specialist_filter_apply(message: Message, state: FSMContext):
             await message.answer("Нет доступа.")
             return
 
-        query = (
-            select(Request)
-            .options(
-                selectinload(Request.engineer),
-                selectinload(Request.master),
-            )
-            .where(Request.specialist_id == specialist.id)
-            .order_by(Request.created_at.desc())
-        )
-
+        filter_payload: dict[str, str] = {"mode": mode or "", "value": value}
         if mode == "адрес":
-            query = query.where(func.lower(Request.address).like(f"%{value.lower()}%"))
+            filter_payload["value"] = value
         elif mode == "дата":
             try:
                 start_str, end_str = [p.strip() for p in value.split("-", 1)]
@@ -266,39 +287,41 @@ async def specialist_filter_apply(message: Message, state: FSMContext):
             except Exception:
                 await message.answer("Неверный формат. Используйте ДД.ММ.ГГГГ-ДД.ММ.ГГГГ.")
                 return
-            query = query.where(Request.created_at.between(start, end))
+            filter_payload["start"] = start.isoformat()
+            filter_payload["end"] = end.isoformat()
 
-        requests = (
-            (await session.execute(query.limit(30)))
-            .scalars()
-            .all()
+        await state.update_data(spec_filter=filter_payload)
+        await state.set_state(None)
+
+        await _show_specialist_requests_list(
+            message,
+            session,
+            specialist.id,
+            page=0,
+            context="filter",
+            filter_payload=filter_payload,
         )
-
-    await state.clear()
-
-    if not requests:
-        await message.answer("Заявок по заданному фильтру не найдено.")
-        return
-
-    builder = InlineKeyboardBuilder()
-    for req in requests:
-        status = req.status.value
-        builder.button(
-            text=f"{format_request_label(req)} · {status}",
-            callback_data=f"spec:detail:{req.id}",
-        )
-    builder.adjust(1)
-
-    await message.answer(
-        "Результаты фильтрации. Выберите заявку:",
-        reply_markup=builder.as_markup(),
-    )
 
 
 @router.callback_query(F.data.startswith("spec:detail:"))
 async def specialist_request_detail(callback: CallbackQuery):
-    _, _, request_id_str = callback.data.split(":")
-    request_id = int(request_id_str)
+    parts = callback.data.split(":")
+    request_id = int(parts[2])
+    context = "list"
+    page = 0
+    if len(parts) >= 4:
+        if parts[3] == "f":
+            context = "filter"
+            if len(parts) >= 5:
+                try:
+                    page = int(parts[4])
+                except ValueError:
+                    page = 0
+        else:
+            try:
+                page = int(parts[3])
+            except ValueError:
+                page = 0
 
     async with async_session() as session:
         specialist = await _get_specialist(session, callback.from_user.id)
@@ -377,8 +400,12 @@ async def specialist_request_detail(callback: CallbackQuery):
             callback_data=f"spec:close_info:{request.id}",
         )
     
-    builder.button(text="⬅️ Назад к списку", callback_data="spec:back")
-    builder.button(text="🔄 Обновить", callback_data=f"spec:detail:{request.id}")
+    back_callback = f"spec:list:{page}" if context == "list" else f"spec:filter:{page}"
+    refresh_callback = (
+        f"spec:detail:{request.id}:f:{page}" if context == "filter" else f"spec:detail:{request.id}:{page}"
+    )
+    builder.button(text="⬅️ Назад к списку", callback_data=back_callback)
+    builder.button(text="🔄 Обновить", callback_data=refresh_callback)
     
     await callback.message.edit_text(detail_text, reply_markup=builder.as_markup())
     await callback.answer()
@@ -675,31 +702,28 @@ async def specialist_open_file(callback: CallbackQuery):
             await callback.answer(f"Ошибка при отправке файла: {str(e)}", show_alert=True)
 
 
-@router.callback_query(F.data == "spec:back")
+@router.callback_query(F.data.startswith("spec:back"))
 async def specialist_back_to_list(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    page = 0
+    if len(parts) >= 3:
+        try:
+            page = int(parts[2])
+        except ValueError:
+            page = 0
+
     async with async_session() as session:
         specialist = await _get_specialist(session, callback.from_user.id)
         if not specialist:
             await callback.answer("Нет доступа.", show_alert=True)
             return
-        requests = await _load_specialist_requests(session, specialist.id)
-
-    if not requests:
-        await callback.message.edit_text("У вас пока нет заявок. Создайте первую через «➕ Создать заявку».")
-        await callback.answer()
-        return
-
-    builder = InlineKeyboardBuilder()
-    for req in requests:
-        builder.button(
-            text=f"{format_request_label(req)} · {req.status.value}",
-            callback_data=f"spec:detail:{req.id}",
+        await _show_specialist_requests_list(
+            callback.message,
+            session,
+            specialist.id,
+            page=page,
+            edit=True,
         )
-    builder.adjust(1)
-    await callback.message.edit_text(
-        "Выберите заявку, чтобы посмотреть подробности и актуальный статус.",
-        reply_markup=builder.as_markup(),
-    )
     await callback.answer()
 
 
@@ -1400,6 +1424,134 @@ STATUS_TITLES = {
     RequestStatus.CANCELLED: "Отменена",
 }
 
+
+def _specialist_filter_conditions(filter_payload: dict[str, str] | None) -> list:
+    if not filter_payload:
+        return []
+    mode = (filter_payload.get("mode") or "").strip().lower()
+    value = (filter_payload.get("value") or "").strip()
+    conditions: list = []
+    if mode == "адрес" and value:
+        conditions.append(func.lower(Request.address).like(f"%{value.lower()}%"))
+    elif mode == "дата":
+        start = filter_payload.get("start")
+        end = filter_payload.get("end")
+        if start and end:
+            try:
+                start_dt = datetime.fromisoformat(start)
+                end_dt = datetime.fromisoformat(end)
+                conditions.append(Request.created_at.between(start_dt, end_dt))
+            except ValueError:
+                pass
+    return conditions
+
+
+async def _fetch_specialist_requests_page(
+    session,
+    specialist_id: int,
+    page: int,
+    filter_payload: dict[str, str] | None = None,
+) -> tuple[list[Request], int, int, int]:
+    conditions = [Request.specialist_id == specialist_id, *_specialist_filter_conditions(filter_payload)]
+    total = await session.scalar(select(func.count()).select_from(Request).where(*conditions))
+    total = int(total or 0)
+    total_pages = total_pages_for(total, REQUESTS_PAGE_SIZE)
+    page = clamp_page(page, total_pages)
+    requests = (
+        (
+            await session.execute(
+                select(Request)
+                .options(
+                    selectinload(Request.engineer),
+                    selectinload(Request.master),
+                    selectinload(Request.work_items),
+                )
+                .where(*conditions)
+                .order_by(Request.created_at.desc())
+                .limit(REQUESTS_PAGE_SIZE)
+                .offset(page * REQUESTS_PAGE_SIZE)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return requests, page, total_pages, total
+
+
+async def _show_specialist_requests_list(
+    message: Message,
+    session,
+    specialist_id: int,
+    page: int,
+    *,
+    context: str = "list",
+    filter_payload: dict[str, str] | None = None,
+    edit: bool = False,
+) -> None:
+    requests, page, total_pages, total = await _fetch_specialist_requests_page(
+        session,
+        specialist_id,
+        page,
+        filter_payload=filter_payload,
+    )
+
+    if not requests:
+        text = (
+            "Заявок по заданному фильтру не найдено."
+            if context == "filter"
+            else "У вас пока нет заявок. Создайте первую через «➕ Создать заявку»."
+        )
+        if edit:
+            await message.edit_text(text)
+        else:
+            await message.answer(text)
+        return
+
+    builder = InlineKeyboardBuilder()
+    start_index = page * REQUESTS_PAGE_SIZE
+    for idx, req in enumerate(requests, start=start_index + 1):
+        status = req.status.value
+        if context == "filter":
+            detail_cb = f"spec:detail:{req.id}:f:{page}"
+        else:
+            detail_cb = f"spec:detail:{req.id}:{page}"
+        builder.button(
+            text=f"{idx}. {format_request_label(req)} · {status}",
+            callback_data=detail_cb,
+        )
+    builder.adjust(1)
+
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(
+                InlineKeyboardButton(
+                    text="⬅️",
+                    callback_data=f"spec:{'filter' if context == 'filter' else 'list'}:{page - 1}",
+                )
+            )
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="spec:noop"))
+        if page < total_pages - 1:
+            nav.append(
+                InlineKeyboardButton(
+                    text="➡️",
+                    callback_data=f"spec:{'filter' if context == 'filter' else 'list'}:{page + 1}",
+                )
+            )
+        builder.row(*nav)
+
+    header = (
+        "Результаты фильтрации. Выберите заявку:"
+        if context == "filter"
+        else "Выберите заявку, чтобы посмотреть подробности и актуальный статус."
+    )
+    footer = f"\n\nСтраница {page + 1}/{total_pages} · Всего: {total}"
+    text = f"{header}{footer}"
+
+    if edit:
+        await message.edit_text(text, reply_markup=builder.as_markup())
+    else:
+        await message.answer(text, reply_markup=builder.as_markup())
 
 async def _load_specialist_requests(session, specialist_id: int) -> list[Request]:
     return (

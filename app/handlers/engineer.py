@@ -9,7 +9,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InputMediaPhoto, InputMediaVideo, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
@@ -36,11 +36,13 @@ from app.infrastructure.db.session import async_session
 from app.keyboards.calendar import build_calendar, parse_calendar_callback, shift_month
 from app.services.request_service import RequestCreateData, RequestService
 from app.services.work_catalog import get_work_catalog
+from app.utils.pagination import clamp_page, total_pages_for
 from app.utils.request_formatters import format_request_label
 from app.utils.timezone import combine_moscow, format_moscow, now_moscow
 
 router = Router()
 ENGINEER_CALENDAR_PREFIX = "eng_schedule"
+REQUESTS_PAGE_SIZE = 10
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +85,135 @@ STATUS_TITLES = {
     RequestStatus.CLOSED: "Закрыта",
     RequestStatus.CANCELLED: "Отменена",
 }
+
+
+def _engineer_filter_conditions(filter_payload: dict[str, str] | None) -> list:
+    if not filter_payload:
+        return []
+    mode = (filter_payload.get("mode") or "").strip().lower()
+    value = (filter_payload.get("value") or "").strip()
+    conditions: list = []
+    if mode == "адрес" and value:
+        conditions.append(func.lower(Request.address).like(f"%{value.lower()}%"))
+    elif mode == "дата":
+        start = filter_payload.get("start")
+        end = filter_payload.get("end")
+        if start and end:
+            try:
+                start_dt = datetime.fromisoformat(start)
+                end_dt = datetime.fromisoformat(end)
+                conditions.append(Request.created_at.between(start_dt, end_dt))
+            except ValueError:
+                pass
+    return conditions
+
+
+async def _fetch_engineer_requests_page(
+    session,
+    engineer_id: int,
+    page: int,
+    filter_payload: dict[str, str] | None = None,
+) -> tuple[list[Request], int, int, int]:
+    conditions = [Request.engineer_id == engineer_id, *_engineer_filter_conditions(filter_payload)]
+    total = await session.scalar(select(func.count()).select_from(Request).where(*conditions))
+    total = int(total or 0)
+    total_pages = total_pages_for(total, REQUESTS_PAGE_SIZE)
+    page = clamp_page(page, total_pages)
+    requests = (
+        (
+            await session.execute(
+                select(Request)
+                .options(
+                    selectinload(Request.object),
+                    selectinload(Request.contract),
+                    selectinload(Request.work_items),
+                    selectinload(Request.master),
+                )
+                .where(*conditions)
+                .order_by(Request.created_at.desc())
+                .limit(REQUESTS_PAGE_SIZE)
+                .offset(page * REQUESTS_PAGE_SIZE)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return requests, page, total_pages, total
+
+
+async def _show_engineer_requests_list(
+    message: Message,
+    session,
+    engineer_id: int,
+    page: int,
+    *,
+    context: str = "list",
+    filter_payload: dict[str, str] | None = None,
+    edit: bool = False,
+) -> None:
+    requests, page, total_pages, total = await _fetch_engineer_requests_page(
+        session,
+        engineer_id,
+        page,
+        filter_payload=filter_payload,
+    )
+
+    if not requests:
+        text = (
+            "Заявок по заданному фильтру не найдено."
+            if context == "filter"
+            else "У вас пока нет назначенных заявок. Ожидайте распределения."
+        )
+        if edit:
+            await message.edit_text(text)
+        else:
+            await message.answer(text)
+        return
+
+    builder = InlineKeyboardBuilder()
+    start_index = page * REQUESTS_PAGE_SIZE
+    for idx, req in enumerate(requests, start=start_index + 1):
+        status_text = STATUS_TITLES.get(req.status, req.status.value)
+        detail_cb = (
+            f"eng:detail:{req.id}:f:{page}" if context == "filter" else f"eng:detail:{req.id}:{page}"
+        )
+        builder.button(
+            text=f"{idx}. {format_request_label(req)} · {status_text}",
+            callback_data=detail_cb,
+        )
+    builder.adjust(1)
+
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(
+                InlineKeyboardButton(
+                    text="⬅️",
+                    callback_data=f"eng:{'filter' if context == 'filter' else 'list'}:{page - 1}",
+                )
+            )
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="eng:noop"))
+        if page < total_pages - 1:
+            nav.append(
+                InlineKeyboardButton(
+                    text="➡️",
+                    callback_data=f"eng:{'filter' if context == 'filter' else 'list'}:{page + 1}",
+                )
+            )
+        builder.row(*nav)
+
+    header = (
+        "Результаты фильтрации. Выберите заявку:"
+        if context == "filter"
+        else "Выберите заявку, чтобы управлять этапами и бюджетом."
+    )
+    footer = f"\n\nСтраница {page + 1}/{total_pages} · Всего: {total}"
+    text = f"{header}{footer}"
+
+    if edit:
+        await message.edit_text(text, reply_markup=builder.as_markup())
+    else:
+        await message.answer(text, reply_markup=builder.as_markup())
 
 
 @router.message(F.text == "➕ Новая заявка")
@@ -306,24 +437,53 @@ async def engineer_requests(message: Message):
             await message.answer("Эта функция доступна только инженерам, специалистам и суперадминам.")
             return
 
-        requests = await _load_engineer_requests(session, engineer.id)
+        await _show_engineer_requests_list(message, session, engineer.id, page=0)
 
-    if not requests:
-        await message.answer("У вас пока нет назначенных заявок. Ожидайте распределения.")
-        return
 
-    builder = InlineKeyboardBuilder()
-    for req in requests:
-        builder.button(
-            text=f"{format_request_label(req)} · {STATUS_TITLES.get(req.status, req.status.value)}",
-            callback_data=f"eng:detail:{req.id}",
+@router.callback_query(F.data.startswith("eng:list:"))
+async def engineer_requests_page(callback: CallbackQuery):
+    try:
+        page = int(callback.data.split(":")[2])
+    except (ValueError, IndexError):
+        page = 0
+    async with async_session() as session:
+        engineer = await _get_engineer(session, callback.from_user.id)
+        if not engineer:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        await _show_engineer_requests_list(
+            callback.message,
+            session,
+            engineer.id,
+            page=page,
+            edit=True,
         )
-    builder.adjust(1)
+    await callback.answer()
 
-    await message.answer(
-        "Выберите заявку, чтобы управлять этапами и бюджетом.",
-        reply_markup=builder.as_markup(),
-    )
+
+@router.callback_query(F.data.startswith("eng:filter:"))
+async def engineer_filter_page(callback: CallbackQuery, state: FSMContext):
+    try:
+        page = int(callback.data.split(":")[2])
+    except (ValueError, IndexError):
+        page = 0
+    data = await state.get_data()
+    filter_payload = data.get("eng_filter")
+    async with async_session() as session:
+        engineer = await _get_engineer(session, callback.from_user.id)
+        if not engineer:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        await _show_engineer_requests_list(
+            callback.message,
+            session,
+            engineer.id,
+            page=page,
+            context="filter",
+            filter_payload=filter_payload,
+            edit=True,
+        )
+    await callback.answer()
 
 
 @router.message(F.text == "🔍 Фильтр заявок")
@@ -364,17 +524,9 @@ async def engineer_filter_apply(message: Message, state: FSMContext):
             await message.answer("Нет доступа.")
             return
 
-        query = (
-            select(Request)
-            .options(
-                selectinload(Request.master),
-            )
-            .where(Request.engineer_id == engineer.id)
-            .order_by(Request.created_at.desc())
-        )
-
+        filter_payload: dict[str, str] = {"mode": mode or "", "value": value}
         if mode == "адрес":
-            query = query.where(func.lower(Request.address).like(f"%{value.lower()}%"))
+            filter_payload["value"] = value
         elif mode == "дата":
             try:
                 start_str, end_str = [p.strip() for p in value.split("-", 1)]
@@ -384,37 +536,41 @@ async def engineer_filter_apply(message: Message, state: FSMContext):
             except Exception:
                 await message.answer("Неверный формат. Используйте ДД.ММ.ГГГГ-ДД.ММ.ГГГГ.")
                 return
-            query = query.where(Request.created_at.between(start, end))
+            filter_payload["start"] = start.isoformat()
+            filter_payload["end"] = end.isoformat()
 
-        requests = (
-            (await session.execute(query.limit(30)))
-            .scalars()
-            .all()
+        await state.update_data(eng_filter=filter_payload)
+        await state.set_state(None)
+
+        await _show_engineer_requests_list(
+            message,
+            session,
+            engineer.id,
+            page=0,
+            context="filter",
+            filter_payload=filter_payload,
         )
-
-    await state.clear()
-
-    if not requests:
-        await message.answer("Заявок по заданному фильтру не найдено.")
-        return
-
-    builder = InlineKeyboardBuilder()
-    for req in requests:
-        builder.button(
-            text=f"{format_request_label(req)} · {STATUS_TITLES.get(req.status, req.status.value)}",
-            callback_data=f"eng:detail:{req.id}",
-        )
-    builder.adjust(1)
-
-    await message.answer(
-        "Результаты фильтрации. Выберите заявку:",
-        reply_markup=builder.as_markup(),
-    )
 
 
 @router.callback_query(F.data.startswith("eng:detail:"))
 async def engineer_request_detail(callback: CallbackQuery, state: FSMContext):
-    request_id = int(callback.data.split(":")[2])
+    parts = callback.data.split(":")
+    request_id = int(parts[2])
+    context = "list"
+    page = 0
+    if len(parts) >= 4:
+        if parts[3] == "f":
+            context = "filter"
+            if len(parts) >= 5:
+                try:
+                    page = int(parts[4])
+                except ValueError:
+                    page = 0
+        else:
+            try:
+                page = int(parts[3])
+            except ValueError:
+                page = 0
     async with async_session() as session:
         engineer = await _get_engineer(session, callback.from_user.id)
         if not engineer:
@@ -432,36 +588,37 @@ async def engineer_request_detail(callback: CallbackQuery, state: FSMContext):
     # captions) can be associated correctly when the user is working with this card.
     await state.update_data(request_id=request.id)
 
-    await _show_request_detail(callback.message, request, edit=True)
+    await _show_request_detail(callback.message, request, edit=True, list_context=context, list_page=page)
     await callback.answer()
 
 
-@router.callback_query(F.data == "eng:back")
+@router.callback_query(F.data.startswith("eng:back"))
 async def engineer_back_to_list(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    page = 0
+    if len(parts) >= 3:
+        try:
+            page = int(parts[2])
+        except ValueError:
+            page = 0
+
     async with async_session() as session:
         engineer = await _get_engineer(session, callback.from_user.id)
         if not engineer:
             await callback.answer("Нет доступа.", show_alert=True)
             return
-        requests = await _load_engineer_requests(session, engineer.id)
-
-    if not requests:
-        await callback.message.edit_text("Активных заявок нет. Ожидайте распределения.")
-        await callback.answer()
-        return
-
-    builder = InlineKeyboardBuilder()
-    for req in requests:
-        builder.button(
-            text=f"{format_request_label(req)} · {STATUS_TITLES.get(req.status, req.status.value)}",
-            callback_data=f"eng:detail:{req.id}",
+        await _show_engineer_requests_list(
+            callback.message,
+            session,
+            engineer.id,
+            page=page,
+            edit=True,
         )
-    builder.adjust(1)
+    await callback.answer()
 
-    await callback.message.edit_text(
-        "Выберите заявку, чтобы управлять этапами и бюджетом.",
-        reply_markup=builder.as_markup(),
-    )
+
+@router.callback_query(F.data == "eng:noop")
+async def engineer_noop(callback: CallbackQuery):
     await callback.answer()
 
 
@@ -2392,6 +2549,7 @@ async def _load_request(session, engineer_id: int, request_id: int) -> Request |
             selectinload(Request.contract),
             selectinload(Request.defect_type),
             selectinload(Request.work_items),
+            selectinload(Request.work_sessions),
             selectinload(Request.master),
             selectinload(Request.engineer),
             selectinload(Request.specialist),
@@ -2425,9 +2583,16 @@ async def _refresh_request_detail(bot, chat_id: int, engineer_telegram_id: int, 
         pass
 
 
-async def _show_request_detail(message: Message, request: Request, *, edit: bool = False) -> None:
+async def _show_request_detail(
+    message: Message,
+    request: Request,
+    *,
+    edit: bool = False,
+    list_context: str = "list",
+    list_page: int = 0,
+) -> None:
     text = _format_request_detail(request)
-    keyboard = _detail_keyboard(request.id, request)
+    keyboard = _detail_keyboard(request.id, request, list_context=list_context, list_page=list_page)
     try:
         if edit:
             await message.edit_text(text, reply_markup=keyboard)
@@ -2437,7 +2602,13 @@ async def _show_request_detail(message: Message, request: Request, *, edit: bool
         await message.answer(text, reply_markup=keyboard)
 
 
-def _detail_keyboard(request_id: int, request: Request | None = None):
+def _detail_keyboard(
+    request_id: int,
+    request: Request | None = None,
+    *,
+    list_context: str = "list",
+    list_page: int = 0,
+):
     builder = InlineKeyboardBuilder()
     builder.button(text="🗓 Назначить осмотр", callback_data=f"eng:schedule:{request_id}")
     builder.button(text="✅ Осмотр выполнен", callback_data=f"eng:inspect:{request_id}")
@@ -2448,7 +2619,8 @@ def _detail_keyboard(request_id: int, request: Request | None = None):
     builder.button(text="📄 Готово к подписанию", callback_data=f"eng:ready:{request_id}")
     if request and request.photos:
         builder.button(text="📷 Просмотреть фото", callback_data=f"eng:photos:{request_id}")
-    builder.button(text="⬅️ Назад к списку", callback_data="eng:back")
+    back_cb = f"eng:list:{list_page}" if list_context == "list" else f"eng:filter:{list_page}"
+    builder.button(text="⬅️ Назад к списку", callback_data=back_cb)
     builder.adjust(1)
     return builder.as_markup()
 
@@ -2660,6 +2832,12 @@ def _format_request_detail(request: Request) -> str:
 
     planned_hours = float(request.planned_hours or 0)
     actual_hours = float(request.actual_hours or 0)
+    master_hours = None
+    if request.work_sessions:
+        master_hours = sum(
+            (ws.hours_reported if ws.hours_reported is not None else (ws.hours_calculated or 0))
+            for ws in request.work_sessions
+        )
     
     # Рассчитываем разбивку стоимостей
     cost_breakdown = _calculate_cost_breakdown(request.work_items or [])
@@ -2687,6 +2865,8 @@ def _format_request_detail(request: Request) -> str:
         f"Плановые часы: {_format_hours(planned_hours)}",
         f"Фактические часы: {_format_hours(actual_hours)}",
     ]
+    if master_hours is not None:
+        lines.append(f"Часы мастера: {_format_hours(master_hours)}")
 
     if request.contract:
         lines.append(f"Договор: {request.contract.number}")
