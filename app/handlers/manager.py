@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 from datetime import datetime, timedelta
 
 from aiogram import F, Router
@@ -7,7 +8,13 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, Message
+from aiogram.types import (
+    CallbackQuery,
+    FSInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
@@ -27,6 +34,7 @@ from app.services.reporting import ReportingService
 from app.services.request_service import RequestService
 from app.services.user_service import UserRoleService
 from app.utils.pagination import clamp_page, total_pages_for
+from app.utils.request_filters import format_date_range_label, parse_date_range, quick_date_range
 from app.utils.request_formatters import format_request_label
 from app.utils.timezone import now_moscow
 
@@ -64,6 +72,48 @@ def _manager_filter_conditions(filter_payload: dict[str, str] | None) -> list:
             except ValueError:
                 pass
     return conditions
+
+
+def _manager_filter_label(filter_payload: dict[str, str] | None) -> str:
+    if not filter_payload:
+        return ""
+    mode = (filter_payload.get("mode") or "").strip().lower()
+    if mode == "адрес":
+        value = (filter_payload.get("value") or "").strip()
+        return f"адрес: {value}" if value else ""
+    if mode == "дата":
+        start = filter_payload.get("start")
+        end = filter_payload.get("end")
+        if start and end:
+            try:
+                start_dt = datetime.fromisoformat(start)
+                end_dt = datetime.fromisoformat(end)
+                return f"дата: {format_date_range_label(start_dt, end_dt)}"
+            except ValueError:
+                return ""
+    return ""
+
+
+def _manager_filter_menu_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🏠 По адресу", callback_data="manager:flt:mode:address")
+    builder.button(text="📅 По дате", callback_data="manager:flt:mode:date")
+    builder.button(text="🗓 Сегодня", callback_data="manager:flt:quick:today")
+    builder.button(text="7 дней", callback_data="manager:flt:quick:7d")
+    builder.button(text="30 дней", callback_data="manager:flt:quick:30d")
+    builder.button(text="Этот месяц", callback_data="manager:flt:quick:this_month")
+    builder.button(text="Прошлый месяц", callback_data="manager:flt:quick:prev_month")
+    builder.button(text="♻️ Сбросить фильтр", callback_data="manager:flt:clear")
+    builder.button(text="✖️ Отмена", callback_data="manager:flt:cancel")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def _manager_filter_cancel_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✖️ Отмена", callback_data="manager:flt:cancel")
+    builder.adjust(1)
+    return builder.as_markup()
 
 
 async def _fetch_manager_requests_page(
@@ -160,11 +210,13 @@ async def _show_manager_requests_list(
             )
         builder.row(*nav)
 
-    header = (
-        "Результаты фильтрации. Выберите заявку:"
-        if context == "filter"
-        else "📋 <b>Все заявки</b>\n\nВыберите заявку, чтобы посмотреть подробности и закрыть её."
-    )
+    if context == "filter":
+        label = _manager_filter_label(filter_payload)
+        header = "Результаты фильтрации. Выберите заявку:"
+        if label:
+            header = f"{header}\nФильтр: {html.escape(label)}"
+    else:
+        header = "📋 <b>Все заявки</b>\n\nВыберите заявку, чтобы посмотреть подробности и закрыть её."
     footer = f"\n\nСтраница {page + 1}/{total_pages} · Всего: {total}"
     text = f"{header}{footer}"
 
@@ -655,32 +707,128 @@ async def manager_requests_page(callback: CallbackQuery, state: FSMContext):
 async def manager_filter_start(message: Message, state: FSMContext):
     await state.set_state(ManagerFilterStates.mode)
     await message.answer(
-        "Выберите режим фильтрации:\n"
-        "• отправьте «Адрес» — для поиска по адресу\n"
-        "• отправьте «Дата» — для фильтра по диапазону дат создания (формат 01.01.2025-31.01.2025)"
+        "🔍 <b>Фильтр заявок</b>\n\n"
+        "Выберите способ фильтрации или быстрый период:",
+        reply_markup=_manager_filter_menu_keyboard(),
+        parse_mode="HTML",
     )
 
 
 @router.message(StateFilter(ManagerFilterStates.mode))
 async def manager_filter_mode(message: Message, state: FSMContext):
     text = (message.text or "").strip().lower()
+    if text == "отмена":
+        await state.clear()
+        await message.answer("Фильтр отменён.")
+        return
     if text not in {"адрес", "дата"}:
-        await message.answer("Введите «Адрес» или «Дата».")
+        await message.answer("Введите «Адрес» или «Дата», либо нажмите «Отмена».")
         return
     await state.update_data(mode=text)
     await state.set_state(ManagerFilterStates.value)
     if text == "адрес":
-        await message.answer("Введите часть адреса (улица, дом и т.п.).")
+        await message.answer(
+            "Введите часть адреса (улица, дом и т.п.).",
+            reply_markup=_manager_filter_cancel_keyboard(),
+        )
     else:
-        await message.answer("Введите диапазон дат в формате ДД.ММ.ГГГГ-ДД.ММ.ГГГГ.")
+        await message.answer(
+            "Введите диапазон дат в формате ДД.ММ.ГГГГ-ДД.ММ.ГГГГ.\n"
+            "Можно одну дату (ДД.ММ.ГГГГ) — покажем заявки за этот день.",
+            reply_markup=_manager_filter_cancel_keyboard(),
+        )
+
+
+@router.callback_query(F.data.startswith("manager:flt:mode:"))
+async def manager_filter_mode_callback(callback: CallbackQuery, state: FSMContext):
+    mode = callback.data.split(":")[3]
+    if mode == "address":
+        await state.update_data(mode="адрес")
+        await state.set_state(ManagerFilterStates.value)
+        await callback.message.edit_text(
+            "Введите часть адреса (улица, дом и т.п.).",
+            reply_markup=_manager_filter_cancel_keyboard(),
+        )
+    elif mode == "date":
+        await state.update_data(mode="дата")
+        await state.set_state(ManagerFilterStates.value)
+        await callback.message.edit_text(
+            "Введите диапазон дат в формате ДД.ММ.ГГГГ-ДД.ММ.ГГГГ.\n"
+            "Можно одну дату (ДД.ММ.ГГГГ) — покажем заявки за этот день.",
+            reply_markup=_manager_filter_cancel_keyboard(),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("manager:flt:quick:"))
+async def manager_filter_quick(callback: CallbackQuery, state: FSMContext):
+    code = callback.data.split(":")[3]
+    quick = quick_date_range(code)
+    if not quick:
+        await callback.answer("Неизвестный период.", show_alert=True)
+        return
+    start, end, label = quick
+    filter_payload = {
+        "mode": "дата",
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "value": "",
+        "label": label,
+    }
+    await state.update_data(manager_filter=filter_payload)
+    await state.set_state(None)
+
+    async with async_session() as session:
+        manager = await _get_super_admin(session, callback.from_user.id)
+        if not manager:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        await _show_manager_requests_list(
+            callback.message,
+            session,
+            page=0,
+            context="filter",
+            filter_payload=filter_payload,
+            edit=True,
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "manager:flt:clear")
+async def manager_filter_clear(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(manager_filter=None)
+    await state.set_state(None)
+    async with async_session() as session:
+        manager = await _get_super_admin(session, callback.from_user.id)
+        if not manager:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        await _show_manager_requests_list(
+            callback.message,
+            session,
+            page=0,
+            context="all",
+            edit=True,
+        )
+    await callback.answer("Фильтр сброшен.")
+
+
+@router.callback_query(F.data == "manager:flt:cancel")
+async def manager_filter_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(None)
+    await callback.message.edit_text("Фильтр отменён.")
+    await callback.answer()
 
 
 @router.message(StateFilter(ManagerFilterStates.value))
 async def manager_filter_apply(message: Message, state: FSMContext):
-    from datetime import datetime
     data = await state.get_data()
     mode = data.get("mode")
     value = (message.text or "").strip()
+    if value.lower() == "отмена":
+        await state.clear()
+        await message.answer("Фильтр отменён.")
+        return
 
     async with async_session() as session:
         manager = await _get_super_admin(session, message.from_user.id)
@@ -692,15 +840,14 @@ async def manager_filter_apply(message: Message, state: FSMContext):
         filter_payload: dict[str, str] = {"mode": mode or "", "value": value}
 
         if mode == "адрес":
+            if not value:
+                await message.answer("Адрес не может быть пустым. Введите часть адреса.")
+                return
             filter_payload["value"] = value
         elif mode == "дата":
-            try:
-                start_str, end_str = [p.strip() for p in value.split("-", 1)]
-                start = datetime.strptime(start_str, "%d.%m.%Y")
-                end = datetime.strptime(end_str, "%d.%m.%Y")
-                end = end.replace(hour=23, minute=59, second=59)
-            except Exception:
-                await message.answer("Неверный формат. Используйте ДД.ММ.ГГГГ-ДД.ММ.ГГГГ.")
+            start, end, error = parse_date_range(value)
+            if error:
+                await message.answer(error)
                 return
             filter_payload["start"] = start.isoformat()
             filter_payload["end"] = end.isoformat()
