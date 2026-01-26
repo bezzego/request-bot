@@ -240,6 +240,20 @@ async def specialist_filter_page(callback: CallbackQuery, state: FSMContext):
 
 @router.message(F.text == "🔍 Фильтр заявок")
 async def specialist_filter_start(message: Message, state: FSMContext):
+    async with async_session() as session:
+        specialist = await _get_specialist(session, message.from_user.id)
+        if specialist and specialist.role == UserRole.MANAGER and specialist.leader_profile and specialist.leader_profile.is_super_admin:
+            from app.handlers.manager import ManagerFilterStates, _manager_filter_menu_keyboard
+
+            await state.set_state(ManagerFilterStates.mode)
+            await message.answer(
+                "🔍 <b>Фильтр заявок</b>\n\n"
+                "Выберите способ фильтрации или быстрый период:",
+                reply_markup=_manager_filter_menu_keyboard(),
+                parse_mode="HTML",
+            )
+            return
+
     await state.set_state(SpecialistFilterStates.mode)
     await message.answer(
         "🔍 <b>Фильтр заявок</b>\n\n"
