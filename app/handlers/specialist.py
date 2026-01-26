@@ -447,7 +447,6 @@ async def specialist_request_detail(callback: CallbackQuery):
                 selectinload(Request.engineer),
                 selectinload(Request.master),
                 selectinload(Request.work_items),
-                selectinload(Request.work_sessions),
                 selectinload(Request.photos),
                 selectinload(Request.acts),
                 selectinload(Request.feedback),
@@ -1741,12 +1740,6 @@ def _format_specialist_request_detail(request: Request) -> str:
 
     planned_hours = float(request.planned_hours or 0)
     actual_hours = float(request.actual_hours or 0)
-    master_hours = None
-    if request.work_sessions:
-        master_hours = sum(
-            (ws.hours_reported if ws.hours_reported is not None else (ws.hours_calculated or 0))
-            for ws in request.work_sessions
-        )
     hours_delta = actual_hours - planned_hours
     
     # Рассчитываем разбивку стоимостей
@@ -1774,8 +1767,6 @@ def _format_specialist_request_detail(request: Request) -> str:
         f"Фактические часы: {_format_hours(actual_hours)}",
         f"Δ Часы: {_format_hours(hours_delta)}",
     ]
-    if master_hours is not None:
-        lines.append(f"Часы мастера: {_format_hours(master_hours)}")
 
     if request.contract:
         lines.append(f"Договор: {request.contract.number}")

@@ -2698,7 +2698,6 @@ async def _load_request(session, engineer_id: int, request_id: int) -> Request |
             selectinload(Request.contract),
             selectinload(Request.defect_type),
             selectinload(Request.work_items),
-            selectinload(Request.work_sessions),
             selectinload(Request.master),
             selectinload(Request.engineer),
             selectinload(Request.specialist),
@@ -2981,12 +2980,7 @@ def _format_request_detail(request: Request) -> str:
 
     planned_hours = float(request.planned_hours or 0)
     actual_hours = float(request.actual_hours or 0)
-    master_hours = None
-    if request.work_sessions:
-        master_hours = sum(
-            (ws.hours_reported if ws.hours_reported is not None else (ws.hours_calculated or 0))
-            for ws in request.work_sessions
-        )
+    hours_delta = actual_hours - planned_hours
     
     # Рассчитываем разбивку стоимостей
     cost_breakdown = _calculate_cost_breakdown(request.work_items or [])
@@ -3013,9 +3007,8 @@ def _format_request_detail(request: Request) -> str:
         f"Фактическая общая стоимость: {_format_currency(cost_breakdown['actual_total_cost'])} ₽",
         f"Плановые часы: {_format_hours(planned_hours)}",
         f"Фактические часы: {_format_hours(actual_hours)}",
+        f"Δ Часы: {_format_hours(hours_delta)}",
     ]
-    if master_hours is not None:
-        lines.append(f"Часы мастера: {_format_hours(master_hours)}")
 
     if request.contract:
         lines.append(f"Договор: {request.contract.number}")
