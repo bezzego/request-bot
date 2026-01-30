@@ -453,19 +453,16 @@ async def specialist_request_detail(callback: CallbackQuery):
             )
             .where(Request.id == request_id, Request.specialist_id == specialist.id)
         )
-
-    if not request:
-        await callback.message.edit_text("Заявка не найдена или была удалена.")
-        await callback.answer()
-        return
+        if not request:
+            await callback.message.edit_text("Заявка не найдена или была удалена.")
+            await callback.answer()
+            return
+        from app.handlers.engineer import _get_engineer
+        engineer = await _get_engineer(session, callback.from_user.id)
+        is_engineer = engineer and request.engineer_id == engineer.id
 
     detail_text = _format_specialist_request_detail(request)
     builder = InlineKeyboardBuilder()
-    
-    # Проверяем, является ли специалист/суперадмин инженером на этой заявке
-    from app.handlers.engineer import _get_engineer
-    engineer = await _get_engineer(session, callback.from_user.id)
-    is_engineer = engineer and request.engineer_id == engineer.id
     
     # Если специалист/суперадмин является инженером на этой заявке, показываем кнопки инженера
     if is_engineer:
@@ -512,6 +509,11 @@ async def specialist_request_detail(callback: CallbackQuery):
             callback_data=f"spec:close_info:{request.id}",
         )
     
+    # Кнопка удаления заявки (безвозвратно из БД); из карточки — возврат в карточку при отмене
+    ctx_key = "filter" if context == "filter" else "list"
+    if request.status not in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
+        builder.button(text="🗑 Удалить", callback_data=f"spec:delete:{request.id}:detail")
+
     back_callback = f"spec:list:{page}" if context == "list" else f"spec:filter:{page}"
     refresh_callback = (
         f"spec:detail:{request.id}:f:{page}" if context == "filter" else f"spec:detail:{request.id}:{page}"
@@ -521,6 +523,97 @@ async def specialist_request_detail(callback: CallbackQuery):
     
     await callback.message.edit_text(detail_text, reply_markup=builder.as_markup())
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("spec:delete:"))
+async def specialist_delete_prompt(callback: CallbackQuery):
+    """Показывает подтверждение безвозвратного удаления заявки из БД."""
+    parts = callback.data.split(":")
+    request_id = int(parts[2])
+    from_detail = len(parts) >= 4 and parts[3] == "detail"  # spec:delete:id:detail
+    if from_detail:
+        cancel_cb = f"spec:detail:{request_id}"
+        confirm_cb = f"spec:delete_confirm:{request_id}"
+        ctx_key, page = "list", 0
+    else:
+        ctx_key = parts[3] if len(parts) >= 4 else "list"
+        page = int(parts[4]) if len(parts) >= 5 else 0
+        cancel_cb = f"spec:{ctx_key}:{page}"
+        confirm_cb = f"spec:delete_confirm:{request_id}:{ctx_key}:{page}"
+
+    async with async_session() as session:
+        specialist = await _get_specialist(session, callback.from_user.id)
+        if not specialist:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        request = await session.scalar(
+            select(Request).where(Request.id == request_id, Request.specialist_id == specialist.id)
+        )
+    if not request:
+        await callback.answer("Заявка не найдена.", show_alert=True)
+        return
+    if request.status in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
+        await callback.answer("Заявка уже закрыта или отменена.", show_alert=True)
+        return
+    label = format_request_label(request)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Да, удалить безвозвратно", callback_data=confirm_cb)
+    builder.button(text="❌ Отмена", callback_data=cancel_cb)
+    builder.adjust(1)
+    await callback.message.edit_text(
+        f"⚠️ <b>Удалить заявку {label}?</b>\n\n"
+        "Заявка будет удалена из базы безвозвратно. Это действие нельзя отменить.",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("spec:delete_confirm:"))
+async def specialist_delete_confirm(callback: CallbackQuery, state: FSMContext):
+    """Безвозвратное удаление заявки из БД; при необходимости возврат к списку."""
+    parts = callback.data.split(":")
+    request_id = int(parts[2])
+    return_to_list = len(parts) >= 5
+    ctx_key = parts[3] if return_to_list else "list"
+    page = int(parts[4]) if return_to_list else 0
+
+    async with async_session() as session:
+        specialist = await _get_specialist(session, callback.from_user.id)
+        if not specialist:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        request = await session.scalar(
+            select(Request).where(Request.id == request_id, Request.specialist_id == specialist.id)
+        )
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+        if request.status in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
+            await callback.answer("Заявка уже закрыта или отменена.", show_alert=True)
+            return
+        await RequestService.delete_request(session, request)
+        await session.commit()
+
+        if return_to_list:
+            context = "filter" if ctx_key == "filter" else "list"
+            filter_payload = (await state.get_data()).get("spec_filter") if context == "filter" else None
+            _, _, total_pages, _ = await _fetch_specialist_requests_page(session, specialist.id, 0, filter_payload=filter_payload)
+            safe_page = min(page, max(0, total_pages - 1)) if total_pages else 0
+            await _show_specialist_requests_list(
+                callback.message,
+                session,
+                specialist.id,
+                page=safe_page,
+                context=context,
+                filter_payload=filter_payload,
+                edit=True,
+            )
+            await callback.answer("Заявка удалена из базы")
+            return
+
+    await callback.message.edit_text("✅ Заявка удалена из базы.")
+    await callback.answer("Заявка удалена")
 
 
 @router.callback_query(F.data.startswith("spec:photos:"))
@@ -1662,6 +1755,7 @@ async def _show_specialist_requests_list(
         return
 
     builder = InlineKeyboardBuilder()
+    ctx_key = "filter" if context == "filter" else "list"
     start_index = page * REQUESTS_PAGE_SIZE
     for idx, req in enumerate(requests, start=start_index + 1):
         status = req.status.value
@@ -1673,7 +1767,10 @@ async def _show_specialist_requests_list(
             text=f"{idx}. {format_request_label(req)} · {status}",
             callback_data=detail_cb,
         )
-    builder.adjust(1)
+        # Справа от заявки — маленькая кнопка удаления (безвозвратно из БД)
+        if req.status not in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
+            builder.button(text="🗑", callback_data=f"spec:delete:{req.id}:{ctx_key}:{page}")
+    builder.adjust(2)  # заявка и 🗑 в одну строку
 
     if total_pages > 1:
         nav = []

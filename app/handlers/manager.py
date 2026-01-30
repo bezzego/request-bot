@@ -171,6 +171,7 @@ async def _show_manager_requests_list(
         return
 
     builder = InlineKeyboardBuilder()
+    ctx_key = "filter" if context == "filter" else "all"
     start_index = page * REQUESTS_PAGE_SIZE
     for idx, req in enumerate(requests, start=start_index + 1):
         status_emoji = (
@@ -189,7 +190,10 @@ async def _show_manager_requests_list(
             text=f"{idx}. {status_emoji} {format_request_label(req)} · {req.status.value}",
             callback_data=detail_cb,
         )
-    builder.adjust(1)
+        # Справа от заявки — маленькая кнопка удаления (безвозвратно из БД)
+        if req.status not in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
+            builder.button(text="🗑", callback_data=f"manager:delete:{req.id}:{ctx_key}:{page}")
+    builder.adjust(2)  # заявка и 🗑 в одну строку
 
     if total_pages > 1:
         nav = []
@@ -999,6 +1003,9 @@ async def manager_request_detail(callback: CallbackQuery):
                 callback_data=f"manager:close_info:{request.id}",
             )
         
+        if request.status not in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
+            builder.button(text="🗑 Удалить", callback_data=f"manager:delete:{request.id}:detail:{context}:{page}")
+        
         back_cb = f"manager:list:{context}:{page}"
         refresh_cb = f"manager:detail:{request.id}:{context}:{page}"
         builder.button(text="⬅️ Назад к списку", callback_data=back_cb)
@@ -1012,6 +1019,96 @@ async def manager_request_detail(callback: CallbackQuery):
             if "message is not modified" not in str(e).lower():
                 raise
         await callback.answer()
+
+
+@router.callback_query(F.data.startswith("manager:delete:"))
+async def manager_delete_prompt(callback: CallbackQuery):
+    """Показывает подтверждение безвозвратного удаления заявки из БД."""
+    parts = callback.data.split(":")
+    request_id = int(parts[2])
+    from_detail = len(parts) >= 5 and parts[3] == "detail"  # manager:delete:id:detail:context:page
+    if from_detail:
+        cancel_cb = f"manager:detail:{request_id}:{parts[4]}:{parts[5]}"
+        confirm_cb = f"manager:delete_confirm:{request_id}"
+        ctx_key, page = "all", 0
+    else:
+        ctx_key = parts[3] if len(parts) >= 4 else "all"
+        page = int(parts[4]) if len(parts) >= 5 else 0
+        cancel_cb = f"manager:list:{ctx_key}:{page}"
+        confirm_cb = f"manager:delete_confirm:{request_id}:{ctx_key}:{page}"
+
+    async with async_session() as session:
+        manager = await _get_super_admin(session, callback.from_user.id)
+        if not manager:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        request = await session.scalar(
+            select(Request).where(Request.id == request_id)
+        )
+    if not request:
+        await callback.answer("Заявка не найдена.", show_alert=True)
+        return
+    if request.status in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
+        await callback.answer("Заявка уже закрыта или отменена.", show_alert=True)
+        return
+    label = format_request_label(request)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Да, удалить безвозвратно", callback_data=confirm_cb)
+    builder.button(text="❌ Отмена", callback_data=cancel_cb)
+    builder.adjust(1)
+    await callback.message.edit_text(
+        f"⚠️ <b>Удалить заявку {label}?</b>\n\n"
+        "Заявка будет удалена из базы безвозвратно. Это действие нельзя отменить.",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("manager:delete_confirm:"))
+async def manager_delete_confirm(callback: CallbackQuery, state: FSMContext):
+    """Безвозвратное удаление заявки из БД; при необходимости возврат к списку."""
+    parts = callback.data.split(":")
+    request_id = int(parts[2])
+    return_to_list = len(parts) >= 5  # manager:delete_confirm:id:context:page
+    ctx_key = parts[3] if return_to_list else "all"
+    page = int(parts[4]) if return_to_list else 0
+
+    async with async_session() as session:
+        manager = await _get_super_admin(session, callback.from_user.id)
+        if not manager:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        request = await session.scalar(
+            select(Request).where(Request.id == request_id)
+        )
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+        if request.status in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
+            await callback.answer("Заявка уже закрыта или отменена.", show_alert=True)
+            return
+        await RequestService.delete_request(session, request)
+        await session.commit()
+
+        if return_to_list:
+            context = "filter" if ctx_key == "filter" else "all"
+            filter_payload = (await state.get_data()).get("manager_filter") if context == "filter" else None
+            _, _, total_pages, _ = await _fetch_manager_requests_page(session, 0, filter_payload=filter_payload)
+            safe_page = min(page, max(0, total_pages - 1)) if total_pages else 0
+            await _show_manager_requests_list(
+                callback.message,
+                session,
+                page=safe_page,
+                context=context,
+                filter_payload=filter_payload,
+                edit=True,
+            )
+            await callback.answer("Заявка удалена из базы")
+            return
+
+    await callback.message.edit_text("✅ Заявка удалена из базы.")
+    await callback.answer("Заявка удалена")
 
 
 @router.callback_query(F.data.startswith("manager:file:"))

@@ -565,6 +565,12 @@ class RequestService:
         return request
 
     @staticmethod
+    async def delete_request(session: AsyncSession, request: Request) -> None:
+        """Полностью удаляет заявку из БД (вместе со связанными записями по cascade)."""
+        await session.delete(request)
+        await session.flush()
+
+    @staticmethod
     async def add_work_item(
         session: AsyncSession,
         request: Request,
