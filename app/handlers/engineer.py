@@ -2838,8 +2838,13 @@ def _detail_keyboard(
     list_page: int = 0,
 ):
     builder = InlineKeyboardBuilder()
+    # После осмотра: гарантия / не гарантия (не гарантия → отмена заявки)
+    if request and request.status == RequestStatus.INSPECTED and request.inspection_completed_at:
+        builder.button(text="✅ Гарантия", callback_data=f"eng:warranty_yes:{request_id}")
+        builder.button(text="❌ Не гарантия", callback_data=f"eng:warranty_no:{request_id}")
     builder.button(text="🗓 Назначить осмотр", callback_data=f"eng:schedule:{request_id}")
-    builder.button(text="✅ Осмотр выполнен", callback_data=f"eng:inspect:{request_id}")
+    if request and not request.inspection_completed_at:
+        builder.button(text="✅ Осмотр выполнен", callback_data=f"eng:inspect:{request_id}")
     builder.button(text="⏱ Плановые часы", callback_data=f"eng:set_planned_hours:{request_id}")
     builder.button(text="➕ Плановая позиция", callback_data=f"eng:add_plan:{request_id}")
     builder.button(text="✏️ Обновить факт", callback_data=f"eng:update_fact:{request_id}")
@@ -2854,6 +2859,53 @@ def _detail_keyboard(
     builder.button(text="⬅️ Назад к списку", callback_data=back_cb)
     builder.adjust(1)
     return builder.as_markup()
+
+
+@router.callback_query(F.data.startswith("eng:warranty_yes:"))
+async def engineer_warranty_yes(callback: CallbackQuery, state: FSMContext):
+    """Гарантия: заявка продолжается как обычно."""
+    request_id = int(callback.data.split(":")[2])
+    await callback.answer("Заявка в гарантии. Продолжайте работу по заявке.")
+    # Обновляем карточку (кнопки «Гарантия»/«Не гарантия» остаются до смены статуса)
+    async with async_session() as session:
+        engineer = await _get_engineer(session, callback.from_user.id)
+        if not engineer:
+            return
+        request = await _load_request(session, engineer.id, request_id)
+    if request:
+        await _show_request_detail(callback.message, request, edit=True, list_context="list", list_page=0)
+
+
+@router.callback_query(F.data.startswith("eng:warranty_no:"))
+async def engineer_warranty_no(callback: CallbackQuery, state: FSMContext):
+    """Не гарантия: заявка переводится в статус «Отменена»."""
+    request_id = int(callback.data.split(":")[2])
+    async with async_session() as session:
+        engineer = await _get_engineer(session, callback.from_user.id)
+        if not engineer:
+            await callback.answer("Нет доступа к заявке.", show_alert=True)
+            return
+        request = await _load_request(session, engineer.id, request_id)
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+        if request.status in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
+            await callback.answer("Заявка уже закрыта или отменена.", show_alert=True)
+            return
+        await RequestService.cancel_request(
+            session,
+            request,
+            cancelled_by=engineer.id,
+            reason="Не гарантия (указал инженер)",
+        )
+        await session.commit()
+    await callback.answer("Заявка отменена (не гарантия).", show_alert=True)
+    async with async_session() as session:
+        engineer = await _get_engineer(session, callback.from_user.id)
+        if engineer:
+            request = await _load_request(session, engineer.id, request_id)
+            if request:
+                await _show_request_detail(callback.message, request, edit=True, list_context="list", list_page=0)
 
 
 @router.callback_query(F.data.startswith("eng:set_planned_hours:"))
@@ -3068,87 +3120,64 @@ async def _send_all_photos(message: Message, photos: list[Photo]) -> None:
         await _send_photos_by_type(message, after_photos)
 
 
+# Максимум фото одного типа за раз, чтобы не перегружать чат и не упираться в лимиты Telegram
+MAX_PHOTOS_PER_TYPE = 100
+
+
 async def _send_photos_by_type(message: Message, photos: list[Photo]) -> None:
-    """Отправка фото одного типа, разделяя фото и видео."""
+    """Отправка фото одного типа пачками по 10 (media_group). Фото и видео не тестируем отправкой — шлём пачкой, при ошибке «video» шлём по одному."""
     if not photos:
         return
-    
-    # Разделяем на фото и видео
-    photo_items: list[Photo] = []
-    video_items: list[Photo] = []
-    
-    # Определяем тип каждого файла, пробуя отправить
-    for photo in photos:
+    total = len(photos)
+    to_send = photos[:MAX_PHOTOS_PER_TYPE]
+    if total > MAX_PHOTOS_PER_TYPE:
+        await message.answer(f"Показано {MAX_PHOTOS_PER_TYPE} из {total} (остальные сохранены в заявке).")
+
+    # Пачки по 10 (лимит media_group в Telegram)
+    chunk_size = 10
+    i = 0
+    while i < len(to_send):
+        chunk = to_send[i : i + chunk_size]
+        i += chunk_size
+        media_list: list[InputMediaPhoto] = [
+            InputMediaPhoto(media=p.file_id, caption=p.caption or None) for p in chunk
+        ]
         try:
-            # Пробуем отправить как фото
-            test_msg = await message.bot.send_photo(
-                chat_id=message.chat.id,
-                photo=photo.file_id,
-            )
-            photo_items.append(photo)
-            # Удаляем тестовое сообщение
-            try:
-                await message.bot.delete_message(
-                    chat_id=message.chat.id,
-                    message_id=test_msg.message_id,
-                )
-            except Exception:
-                pass
-        except TelegramBadRequest as e:
-            if "can't use file of type Video as Photo" in str(e) or "Video" in str(e):
-                video_items.append(photo)
+            if len(media_list) == 1:
+                await message.answer_photo(media_list[0].media, caption=media_list[0].caption)
             else:
-                # Другая ошибка, пробуем как видео
-                try:
-                    test_msg = await message.bot.send_video(
-                        chat_id=message.chat.id,
-                        video=photo.file_id,
-                    )
-                    video_items.append(photo)
-                    # Удаляем тестовое сообщение
+                await message.answer_media_group(media_list)
+        except TelegramBadRequest as e:
+            if "Video" in str(e) or "video" in str(e):
+                # В пачке есть видео — отправляем по одному
+                for p in chunk:
                     try:
-                        await message.bot.delete_message(
-                            chat_id=message.chat.id,
-                            message_id=test_msg.message_id,
-                        )
+                        await message.answer_photo(p.file_id, caption=p.caption or None)
+                    except TelegramBadRequest:
+                        try:
+                            await message.answer_video(p.file_id, caption=p.caption or None)
+                        except Exception:
+                            pass
                     except Exception:
                         pass
+            else:
+                for p in chunk:
+                    try:
+                        await message.answer_photo(p.file_id, caption=p.caption or None)
+                    except Exception:
+                        try:
+                            await message.answer_video(p.file_id, caption=p.caption or None)
+                        except Exception:
+                            pass
+        except Exception:
+            for p in chunk:
+                try:
+                    await message.answer_photo(p.file_id, caption=p.caption or None)
                 except Exception:
-                    pass
-    
-    # Отправляем фото группами
-    photo_chunk: list[InputMediaPhoto] = []
-    for idx, photo in enumerate(photo_items):
-        caption = photo.caption or None
-        photo_media = InputMediaPhoto(media=photo.file_id, caption=caption)
-        photo_chunk.append(photo_media)
-        
-        if len(photo_chunk) == 10 or idx == len(photo_items) - 1:
-            try:
-                if len(photo_chunk) == 1:
-                    await message.answer_photo(photo_chunk[0].media, caption=photo_chunk[0].caption)
-                else:
-                    await message.answer_media_group(photo_chunk)
-                photo_chunk = []
-            except Exception:
-                pass
-    
-    # Отправляем видео группами
-    video_chunk: list[InputMediaVideo] = []
-    for idx, photo in enumerate(video_items):
-        caption = photo.caption or None
-        video_media = InputMediaVideo(media=photo.file_id, caption=caption)
-        video_chunk.append(video_media)
-        
-        if len(video_chunk) == 10 or idx == len(video_items) - 1:
-            try:
-                if len(video_chunk) == 1:
-                    await message.answer_video(video_chunk[0].media, caption=video_chunk[0].caption)
-                else:
-                    await message.answer_media_group(video_chunk)
-                video_chunk = []
-            except Exception:
-                pass
+                    try:
+                        await message.answer_video(p.file_id, caption=p.caption or None)
+                    except Exception:
+                        pass
 
 
 def _format_request_detail(request: Request) -> str:
@@ -3210,6 +3239,10 @@ def _format_request_detail(request: Request) -> str:
             lines.append(f"• {start} — {finish} · {duration_str}")
             if session.notes:
                 lines.append(f"  → {session.notes}")
+    elif (request.actual_hours or 0) > 0:
+        lines.append("")
+        lines.append("⏱ <b>Время работы мастера</b>")
+        lines.append(f"• Суммарно: {format_hours_minutes(float(request.actual_hours or 0))} (учёт до внедрения сессий)")
 
     if request.contract:
         lines.append(f"Договор: {request.contract.number}")
