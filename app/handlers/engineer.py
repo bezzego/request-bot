@@ -3120,87 +3120,64 @@ async def _send_all_photos(message: Message, photos: list[Photo]) -> None:
         await _send_photos_by_type(message, after_photos)
 
 
+# Максимум фото одного типа за раз, чтобы не перегружать чат и не упираться в лимиты Telegram
+MAX_PHOTOS_PER_TYPE = 100
+
+
 async def _send_photos_by_type(message: Message, photos: list[Photo]) -> None:
-    """Отправка фото одного типа, разделяя фото и видео."""
+    """Отправка фото одного типа пачками по 10 (media_group). Фото и видео не тестируем отправкой — шлём пачкой, при ошибке «video» шлём по одному."""
     if not photos:
         return
-    
-    # Разделяем на фото и видео
-    photo_items: list[Photo] = []
-    video_items: list[Photo] = []
-    
-    # Определяем тип каждого файла, пробуя отправить
-    for photo in photos:
+    total = len(photos)
+    to_send = photos[:MAX_PHOTOS_PER_TYPE]
+    if total > MAX_PHOTOS_PER_TYPE:
+        await message.answer(f"Показано {MAX_PHOTOS_PER_TYPE} из {total} (остальные сохранены в заявке).")
+
+    # Пачки по 10 (лимит media_group в Telegram)
+    chunk_size = 10
+    i = 0
+    while i < len(to_send):
+        chunk = to_send[i : i + chunk_size]
+        i += chunk_size
+        media_list: list[InputMediaPhoto] = [
+            InputMediaPhoto(media=p.file_id, caption=p.caption or None) for p in chunk
+        ]
         try:
-            # Пробуем отправить как фото
-            test_msg = await message.bot.send_photo(
-                chat_id=message.chat.id,
-                photo=photo.file_id,
-            )
-            photo_items.append(photo)
-            # Удаляем тестовое сообщение
-            try:
-                await message.bot.delete_message(
-                    chat_id=message.chat.id,
-                    message_id=test_msg.message_id,
-                )
-            except Exception:
-                pass
-        except TelegramBadRequest as e:
-            if "can't use file of type Video as Photo" in str(e) or "Video" in str(e):
-                video_items.append(photo)
+            if len(media_list) == 1:
+                await message.answer_photo(media_list[0].media, caption=media_list[0].caption)
             else:
-                # Другая ошибка, пробуем как видео
-                try:
-                    test_msg = await message.bot.send_video(
-                        chat_id=message.chat.id,
-                        video=photo.file_id,
-                    )
-                    video_items.append(photo)
-                    # Удаляем тестовое сообщение
+                await message.answer_media_group(media_list)
+        except TelegramBadRequest as e:
+            if "Video" in str(e) or "video" in str(e):
+                # В пачке есть видео — отправляем по одному
+                for p in chunk:
                     try:
-                        await message.bot.delete_message(
-                            chat_id=message.chat.id,
-                            message_id=test_msg.message_id,
-                        )
+                        await message.answer_photo(p.file_id, caption=p.caption or None)
+                    except TelegramBadRequest:
+                        try:
+                            await message.answer_video(p.file_id, caption=p.caption or None)
+                        except Exception:
+                            pass
                     except Exception:
                         pass
+            else:
+                for p in chunk:
+                    try:
+                        await message.answer_photo(p.file_id, caption=p.caption or None)
+                    except Exception:
+                        try:
+                            await message.answer_video(p.file_id, caption=p.caption or None)
+                        except Exception:
+                            pass
+        except Exception:
+            for p in chunk:
+                try:
+                    await message.answer_photo(p.file_id, caption=p.caption or None)
                 except Exception:
-                    pass
-    
-    # Отправляем фото группами
-    photo_chunk: list[InputMediaPhoto] = []
-    for idx, photo in enumerate(photo_items):
-        caption = photo.caption or None
-        photo_media = InputMediaPhoto(media=photo.file_id, caption=caption)
-        photo_chunk.append(photo_media)
-        
-        if len(photo_chunk) == 10 or idx == len(photo_items) - 1:
-            try:
-                if len(photo_chunk) == 1:
-                    await message.answer_photo(photo_chunk[0].media, caption=photo_chunk[0].caption)
-                else:
-                    await message.answer_media_group(photo_chunk)
-                photo_chunk = []
-            except Exception:
-                pass
-    
-    # Отправляем видео группами
-    video_chunk: list[InputMediaVideo] = []
-    for idx, photo in enumerate(video_items):
-        caption = photo.caption or None
-        video_media = InputMediaVideo(media=photo.file_id, caption=caption)
-        video_chunk.append(video_media)
-        
-        if len(video_chunk) == 10 or idx == len(video_items) - 1:
-            try:
-                if len(video_chunk) == 1:
-                    await message.answer_video(video_chunk[0].media, caption=video_chunk[0].caption)
-                else:
-                    await message.answer_media_group(video_chunk)
-                video_chunk = []
-            except Exception:
-                pass
+                    try:
+                        await message.answer_video(p.file_id, caption=p.caption or None)
+                    except Exception:
+                        pass
 
 
 def _format_request_detail(request: Request) -> str:
