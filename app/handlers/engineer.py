@@ -2838,8 +2838,13 @@ def _detail_keyboard(
     list_page: int = 0,
 ):
     builder = InlineKeyboardBuilder()
+    # После осмотра: гарантия / не гарантия (не гарантия → отмена заявки)
+    if request and request.status == RequestStatus.INSPECTED and request.inspection_completed_at:
+        builder.button(text="✅ Гарантия", callback_data=f"eng:warranty_yes:{request_id}")
+        builder.button(text="❌ Не гарантия", callback_data=f"eng:warranty_no:{request_id}")
     builder.button(text="🗓 Назначить осмотр", callback_data=f"eng:schedule:{request_id}")
-    builder.button(text="✅ Осмотр выполнен", callback_data=f"eng:inspect:{request_id}")
+    if request and not request.inspection_completed_at:
+        builder.button(text="✅ Осмотр выполнен", callback_data=f"eng:inspect:{request_id}")
     builder.button(text="⏱ Плановые часы", callback_data=f"eng:set_planned_hours:{request_id}")
     builder.button(text="➕ Плановая позиция", callback_data=f"eng:add_plan:{request_id}")
     builder.button(text="✏️ Обновить факт", callback_data=f"eng:update_fact:{request_id}")
@@ -2854,6 +2859,53 @@ def _detail_keyboard(
     builder.button(text="⬅️ Назад к списку", callback_data=back_cb)
     builder.adjust(1)
     return builder.as_markup()
+
+
+@router.callback_query(F.data.startswith("eng:warranty_yes:"))
+async def engineer_warranty_yes(callback: CallbackQuery, state: FSMContext):
+    """Гарантия: заявка продолжается как обычно."""
+    request_id = int(callback.data.split(":")[2])
+    await callback.answer("Заявка в гарантии. Продолжайте работу по заявке.")
+    # Обновляем карточку (кнопки «Гарантия»/«Не гарантия» остаются до смены статуса)
+    async with async_session() as session:
+        engineer = await _get_engineer(session, callback.from_user.id)
+        if not engineer:
+            return
+        request = await _load_request(session, engineer.id, request_id)
+    if request:
+        await _show_request_detail(callback.message, request, edit=True, list_context="list", list_page=0)
+
+
+@router.callback_query(F.data.startswith("eng:warranty_no:"))
+async def engineer_warranty_no(callback: CallbackQuery, state: FSMContext):
+    """Не гарантия: заявка переводится в статус «Отменена»."""
+    request_id = int(callback.data.split(":")[2])
+    async with async_session() as session:
+        engineer = await _get_engineer(session, callback.from_user.id)
+        if not engineer:
+            await callback.answer("Нет доступа к заявке.", show_alert=True)
+            return
+        request = await _load_request(session, engineer.id, request_id)
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+        if request.status in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
+            await callback.answer("Заявка уже закрыта или отменена.", show_alert=True)
+            return
+        await RequestService.cancel_request(
+            session,
+            request,
+            cancelled_by=engineer.id,
+            reason="Не гарантия (указал инженер)",
+        )
+        await session.commit()
+    await callback.answer("Заявка отменена (не гарантия).", show_alert=True)
+    async with async_session() as session:
+        engineer = await _get_engineer(session, callback.from_user.id)
+        if engineer:
+            request = await _load_request(session, engineer.id, request_id)
+            if request:
+                await _show_request_detail(callback.message, request, edit=True, list_context="list", list_page=0)
 
 
 @router.callback_query(F.data.startswith("eng:set_planned_hours:"))
