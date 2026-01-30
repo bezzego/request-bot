@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.infrastructure.db.models import Request
+from app.utils.request_formatters import get_request_status_title
 from app.utils.timezone import format_moscow
 
 
@@ -120,7 +121,7 @@ class ExportService:
                 [
                     req.number,
                     req.title,
-                    req.status.value,
+                    get_request_status_title(req.status),
                     ExportService._format_datetime(req.created_at),
                     req.customer.full_name if req.customer else "",
                     req.object.name if req.object else "",

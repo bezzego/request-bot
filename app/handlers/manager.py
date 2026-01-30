@@ -35,7 +35,7 @@ from app.services.request_service import RequestService
 from app.services.user_service import UserRoleService
 from app.utils.pagination import clamp_page, total_pages_for
 from app.utils.request_filters import format_date_range_label, parse_date_range, quick_date_range
-from app.utils.request_formatters import format_request_label
+from app.utils.request_formatters import format_hours_minutes, format_request_label, get_request_status_title
 from app.utils.timezone import now_moscow
 
 router = Router()
@@ -131,6 +131,7 @@ async def _fetch_manager_requests_page(
             await session.execute(
                 select(Request)
                 .options(
+                    selectinload(Request.object),
                     selectinload(Request.specialist),
                     selectinload(Request.engineer),
                     selectinload(Request.master),
@@ -187,7 +188,7 @@ async def _show_manager_requests_list(
             else f"manager:detail:{req.id}:all:{page}"
         )
         builder.button(
-            text=f"{idx}. {status_emoji} {format_request_label(req)} · {req.status.value}",
+            text=f"{idx}. {status_emoji} {format_request_label(req)} · {get_request_status_title(req.status)}",
             callback_data=detail_cb,
         )
         # Под кнопкой заявки — корзинка удаления (безвозвратно из БД)
@@ -623,8 +624,8 @@ async def manager_reports(message: Message):
         f"Плановый бюджет: {summary.planned_budget:,.2f} ₽",
         f"Фактический бюджет: {summary.actual_budget:,.2f} ₽",
         f"Отклонение бюджета: {summary.budget_delta:,.2f} ₽",
-        f"Плановые часы: {summary.planned_hours:,.1f}",
-        f"Фактические часы: {summary.actual_hours:,.1f}",
+        f"Плановые часы: {format_hours_minutes(summary.planned_hours)}",
+        f"Фактические часы: {format_hours_minutes(summary.actual_hours)}",
         f"Закрыто в срок: {summary.closed_in_time} ( {summary.on_time_percent:.1f}% )",
         f"Просрочено: {summary.closed_overdue}",
         f"Среднее время выполнения: {summary.average_completion_time_hours:,.1f} ч",
@@ -941,6 +942,7 @@ async def manager_request_detail(callback: CallbackQuery):
                 selectinload(Request.master),
                 selectinload(Request.specialist),
                 selectinload(Request.work_items),
+                selectinload(Request.work_sessions),
                 selectinload(Request.photos),
                 selectinload(Request.acts),
                 selectinload(Request.feedback),
@@ -967,7 +969,9 @@ async def manager_request_detail(callback: CallbackQuery):
         # Если суперадмин является инженером на этой заявке, показываем кнопки инженера
         if is_engineer:
             builder.button(text="🗓 Назначить осмотр", callback_data=f"eng:schedule:{request.id}")
-            builder.button(text="✅ Осмотр выполнен", callback_data=f"eng:inspect:{request.id}")
+            if not request.inspection_completed_at:
+                builder.button(text="✅ Осмотр выполнен", callback_data=f"eng:inspect:{request.id}")
+            builder.button(text="⏱ Плановые часы", callback_data=f"eng:set_planned_hours:{request.id}")
             builder.button(text="➕ Плановая позиция", callback_data=f"eng:add_plan:{request.id}")
             builder.button(text="✏️ Обновить факт", callback_data=f"eng:update_fact:{request.id}")
             builder.button(text="⏱ Срок устранения", callback_data=f"eng:set_term:{request.id}")
@@ -975,6 +979,10 @@ async def manager_request_detail(callback: CallbackQuery):
             builder.button(text="📄 Готово к подписанию", callback_data=f"eng:ready:{request.id}")
         
         # Добавляем кнопки для файлов (писем)
+        # Суперадмин всегда может просматривать фото (до и после)
+        if request.photos:
+            builder.button(text="📷 Просмотреть фото", callback_data=f"manager:photos:{request.id}")
+        
         letter_acts = [act for act in request.acts if act.type == ActType.LETTER]
         for act in letter_acts:
             file_name = act.file_name or f"Файл {act.id}"
@@ -1019,6 +1027,29 @@ async def manager_request_detail(callback: CallbackQuery):
             if "message is not modified" not in str(e).lower():
                 raise
         await callback.answer()
+
+
+@router.callback_query(F.data.startswith("manager:photos:"))
+async def manager_view_photos(callback: CallbackQuery):
+    """Просмотр фото заявки (до и после) для суперадмина."""
+    _, _, request_id_str = callback.data.split(":")
+    request_id = int(request_id_str)
+    async with async_session() as session:
+        manager = await _get_super_admin(session, callback.from_user.id)
+        if not manager:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        request = await session.scalar(
+            select(Request)
+            .options(selectinload(Request.photos))
+            .where(Request.id == request_id)
+        )
+    if not request or not request.photos:
+        await callback.answer("Фото по заявке отсутствуют.", show_alert=True)
+        return
+    from app.handlers.engineer import _send_all_photos
+    await _send_all_photos(callback.message, list(request.photos))
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("manager:delete:"))

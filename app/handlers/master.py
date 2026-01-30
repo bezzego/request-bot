@@ -35,7 +35,7 @@ from app.keyboards.master_kb import finish_photo_kb, master_kb
 from app.services.request_service import RequestService
 from app.services.work_catalog import get_work_catalog
 from app.utils.pagination import clamp_page, total_pages_for
-from app.utils.request_formatters import format_request_label
+from app.utils.request_formatters import format_hours_minutes, format_request_label, STATUS_TITLES
 from app.utils.timezone import format_moscow, now_moscow
 from app.keyboards.calendar import build_calendar, parse_calendar_callback, shift_month
 
@@ -58,19 +58,6 @@ FINISH_CONTEXT_KEY = "finish_context"
 PHOTO_CONFIRM_TEXT = "✅ Подтвердить фото"
 CANCEL_TEXT = "Отмена"
 PHOTO_TYPES_FOR_FINISH = (PhotoType.PROCESS, PhotoType.AFTER)
-
-
-STATUS_TITLES = {
-    RequestStatus.NEW: "Новая",
-    RequestStatus.INSPECTION_SCHEDULED: "Назначен осмотр",
-    RequestStatus.INSPECTED: "Осмотр выполнен",
-    RequestStatus.ASSIGNED: "Назначена мастеру",
-    RequestStatus.IN_PROGRESS: "В работе",
-    RequestStatus.COMPLETED: "Работы завершены",
-    RequestStatus.READY_FOR_SIGN: "Ожидает подписания",
-    RequestStatus.CLOSED: "Закрыта",
-    RequestStatus.CANCELLED: "Отменена",
-}
 
 
 async def _fetch_master_requests_page(
@@ -1962,6 +1949,10 @@ async def _send_defect_photos_with_start_button(message: Message, photos: list[P
     builder.adjust(1)
     start_button_markup = builder.as_markup()
 
+    # По умолчанию все — фото; при ошибке (есть видео) переразделим в except
+    photo_items: list[Photo] = list(before_photos)
+    video_items: list[Photo] = []
+
     # Пробуем отправить все файлы как фото, при ошибке разделяем на фото и видео
     photo_chunk: list[InputMediaPhoto] = []
     total_items = len(before_photos)
@@ -2013,8 +2004,8 @@ async def _send_defect_photos_with_start_button(message: Message, photos: list[P
                         raise
     except TelegramBadRequest:
         # Есть видео, разделяем на фото и видео
-        photo_items: list[Photo] = []
-        video_items: list[Photo] = []
+        photo_items.clear()
+        video_items.clear()
         test_message_ids: list[int] = []
         
         # Определяем тип каждого файла, пробуя отправить
@@ -2471,8 +2462,8 @@ def _format_request_detail(request: Request) -> str:
         f"Фактическая стоимость видов работ: {_format_currency(cost_breakdown['actual_work_cost'])} ₽",
         f"Фактическая стоимость материалов: {_format_currency(cost_breakdown['actual_material_cost'])} ₽",
         f"Фактическая общая стоимость: {_format_currency(cost_breakdown['actual_total_cost'])} ₽",
-        f"Плановые часы: {_format_hours(planned_hours)}",
-        f"Фактические часы: {_format_hours(actual_hours)}",
+        f"Плановые часы: {format_hours_minutes(planned_hours)}",
+        f"Фактические часы: {format_hours_minutes(actual_hours)}",
     ]
 
     if defects_photos:
@@ -2508,18 +2499,27 @@ def _format_request_detail(request: Request) -> str:
             )
             if item.actual_hours is not None:
                 lines.append(
-                    f"  Часы: {_format_hours(item.planned_hours)} → {_format_hours(item.actual_hours)}"
+                    f"  Часы: {format_hours_minutes(item.planned_hours)} → {format_hours_minutes(item.actual_hours)}"
                 )
             if item.notes:
                 lines.append(f"  → {item.notes}")
 
     if request.work_sessions:
         lines.append("")
-        lines.append("Рабочие сессии:")
+        lines.append("⏱ <b>Время работы мастера</b>")
         for session in sorted(request.work_sessions, key=lambda ws: ws.started_at):
             start = format_moscow(session.started_at, "%d.%m %H:%M") or "—"
-            finish = format_moscow(session.finished_at, "%d.%m %H:%M") or "—"
-            lines.append(f"• {start} → {finish} | {_format_hours(session.hours_reported)}")
+            finish = format_moscow(session.finished_at, "%d.%m %H:%M") if session.finished_at else "в работе"
+            duration_h = (
+                float(session.hours_reported)
+                if session.hours_reported is not None
+                else (float(session.hours_calculated) if session.hours_calculated is not None else None)
+            )
+            if duration_h is None and session.started_at and session.finished_at:
+                delta = session.finished_at - session.started_at
+                duration_h = delta.total_seconds() / 3600
+            duration_str = format_hours_minutes(duration_h) if duration_h is not None else "—"
+            lines.append(f"• {start} — {finish} · {duration_str}")
             if session.notes:
                 lines.append(f"  → {session.notes}")
 
@@ -2570,9 +2570,7 @@ def _format_currency(value: float | None) -> str:
 
 
 def _format_hours(value: float | None) -> str:
-    if value is None:
-        return "0.0 ч"
-    return f"{float(value):.1f} ч"
+    return format_hours_minutes(value)
 
 
 async def _show_materials_after_work_save(

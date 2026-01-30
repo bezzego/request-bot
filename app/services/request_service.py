@@ -26,6 +26,7 @@ from app.infrastructure.db.models import (
 from app.services.work_catalog import WorkCatalogItem, WorkMaterialSpec, get_work_catalog
 from app.services.material_catalog import MaterialCatalogItem
 from app.utils.identifiers import generate_request_number
+from app.utils.request_formatters import get_request_status_title
 from app.utils.timezone import now_moscow, to_moscow
 
 
@@ -48,6 +49,7 @@ class RequestCreateData:
     inspection_datetime: datetime | None = None
     inspection_location: str | None = None
     remedy_term_days: int = 14
+    due_at: datetime | None = None
     customer_id: int | None = None
 
 
@@ -89,7 +91,14 @@ class RequestService:
             defect_ref = await RequestService._get_or_create_defect_type(session, data.defect_type_name)
 
         inspection_dt = to_moscow(data.inspection_datetime)
-        due_at = RequestService._calculate_due_date(inspection_dt, data.remedy_term_days)
+        if data.due_at is not None:
+            due_at = to_moscow(data.due_at)
+            baseline = to_moscow(inspection_dt) or now_moscow()
+            remedy_term_days = max(0, (due_at - baseline).days) if due_at else data.remedy_term_days
+        else:
+            # Срок устранения не задан при создании (его указывает инженер)
+            due_at = None
+            remedy_term_days = data.remedy_term_days
 
         request = Request(
             number=request_number,
@@ -105,7 +114,7 @@ class RequestService:
             inspection_scheduled_at=inspection_dt,
             inspection_location=data.inspection_location,
             due_at=due_at,
-            remedy_term_days=data.remedy_term_days,
+            remedy_term_days=remedy_term_days,
             specialist_id=data.specialist_id,
             engineer_id=data.engineer_id,
             customer_id=data.customer_id,
@@ -226,6 +235,31 @@ class RequestService:
             base = request.due_at or now_moscow()
             request.due_at = base + timedelta(days=remedy_term_days)
         await session.flush()
+        return request
+
+    @staticmethod
+    async def set_due_date(
+        session: AsyncSession,
+        request: Request,
+        due_at: datetime,
+    ) -> Request:
+        """Устанавливает срок устранения (дату дедлайна)."""
+        due_at = to_moscow(due_at)
+        request.due_at = due_at
+        baseline = to_moscow(request.inspection_scheduled_at) or now_moscow()
+        request.remedy_term_days = max(0, (due_at - baseline).days)
+        await session.flush()
+        return request
+
+    @staticmethod
+    async def set_engineer_planned_hours(
+        session: AsyncSession,
+        request: Request,
+        hours: float,
+    ) -> Request:
+        """Устанавливает плановые часы, введённые инженером вручную (суммируются с часами из позиций)."""
+        request.engineer_planned_hours = max(0.0, float(hours))
+        await RequestService._recalculate_budget(session, request)
         return request
 
     @staticmethod
@@ -405,7 +439,18 @@ class RequestService:
             delta = finished_at - work_session.started_at
             work_session.hours_calculated = round(delta.total_seconds() / 3600, 2)
 
-        await RequestService._recalculate_hours(session, request)
+        await session.flush()
+        # Явно передаём часы только что закрытой сессии: после flush() SELECT может ещё не видеть строку
+        current_hours = (
+            work_session.hours_reported
+            if work_session.hours_reported is not None
+            else work_session.hours_calculated
+        ) or 0
+        await RequestService._recalculate_hours(
+            session, request,
+            excluding_session_id=work_session.id,
+            add_session_hours=float(current_hours),
+        )
 
         previous_status = request.status
         if finalize:
@@ -497,8 +542,8 @@ class RequestService:
         # Проверяем статус - заявка должна быть завершена или готова к подписанию
         if request.status not in {RequestStatus.COMPLETED, RequestStatus.READY_FOR_SIGN}:
             reasons.append(
-                f"Заявка должна быть в статусе 'Работы завершены' или 'Ожидает подписания', "
-                f"текущий статус: {request.status.value}"
+                f"Заявка должна быть в статусе «Работы завершены» или «Ожидает подписания», "
+                f"текущий статус: {get_request_status_title(request.status)}"
             )
         
         # Проверяем, что работы завершены
@@ -1038,25 +1083,65 @@ class RequestService:
             .where(WorkItem.request_id == request.id)
         )
         result = await session.execute(stmt)
-        planned_cost, actual_cost, planned_hours, actual_hours = result.one()
+        planned_cost, actual_cost, work_item_planned_hours, work_item_actual_hours = result.one()
         request.planned_budget = float(planned_cost)
         request.actual_budget = float(actual_cost)
-        request.planned_hours = float(planned_hours)
-        request.actual_hours = float(actual_hours)
+        engineer_hours = float(request.engineer_planned_hours or 0)
+        request.planned_hours = engineer_hours + float(work_item_planned_hours)
+        await RequestService._recalculate_actual_hours(session, request, work_item_actual_hours=float(work_item_actual_hours))
         await session.flush()
 
     @staticmethod
-    async def _recalculate_hours(session: AsyncSession, request: Request) -> None:
-        stmt = (
-            select(
-                func.coalesce(func.sum(WorkSession.hours_reported), 0),
-                func.coalesce(func.sum(WorkSession.hours_calculated), 0),
-            ).where(WorkSession.request_id == request.id)
+    async def _recalculate_hours(
+        session: AsyncSession,
+        request: Request,
+        *,
+        excluding_session_id: int | None = None,
+        add_session_hours: float = 0,
+    ) -> None:
+        """Пересчитывает request.actual_hours по сессиям мастера (и позициям бюджета)."""
+        await RequestService._recalculate_actual_hours(
+            session,
+            request,
+            excluding_session_id=excluding_session_id,
+            add_session_hours=add_session_hours,
         )
-        result = await session.execute(stmt)
-        reported, calculated = result.one()
-        request.actual_hours = float(reported or calculated)
         await session.flush()
+
+    @staticmethod
+    async def _recalculate_actual_hours(
+        session: AsyncSession,
+        request: Request,
+        *,
+        work_item_actual_hours: float | None = None,
+        excluding_session_id: int | None = None,
+        add_session_hours: float = 0,
+    ) -> None:
+        """Суммирует фактические часы: позиции бюджета + сессии мастера (hours_reported или hours_calculated)."""
+        if work_item_actual_hours is None:
+            stmt = select(func.coalesce(func.sum(WorkItem.actual_hours), 0)).where(
+                WorkItem.request_id == request.id
+            )
+            result = await session.execute(stmt)
+            work_item_actual_hours = float(result.scalar() or 0)
+        # По каждой завершённой сессии берём hours_reported или hours_calculated, суммируем
+        filters = [
+            WorkSession.request_id == request.id,
+            WorkSession.finished_at.isnot(None),
+        ]
+        if excluding_session_id is not None:
+            filters.append(WorkSession.id != excluding_session_id)
+        stmt = select(
+            func.coalesce(
+                func.sum(
+                    func.coalesce(WorkSession.hours_reported, WorkSession.hours_calculated, 0)
+                ),
+                0,
+            )
+        ).where(*filters)
+        result = await session.execute(stmt)
+        session_hours = float(result.scalar() or 0) + add_session_hours
+        request.actual_hours = work_item_actual_hours + session_hours
 
     @staticmethod
     async def _get_or_create_object(session: AsyncSession, name: str, address: str | None) -> Object:

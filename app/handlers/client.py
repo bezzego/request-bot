@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 from app.infrastructure.db.models import Feedback, Request, RequestStatus, User, UserRole
 from app.infrastructure.db.session import async_session
 from app.utils.pagination import clamp_page, total_pages_for
-from app.utils.request_formatters import format_request_label
+from app.utils.request_formatters import format_request_label, STATUS_TITLES
 from app.utils.timezone import format_moscow
 
 router = Router()
@@ -25,17 +25,6 @@ class FeedbackStates(StatesGroup):
     waiting_comment = State()
 
 
-STATUS_TITLES = {
-    RequestStatus.NEW: "В обработке",
-    RequestStatus.INSPECTION_SCHEDULED: "Назначен осмотр",
-    RequestStatus.INSPECTED: "Осмотр выполнен",
-    RequestStatus.ASSIGNED: "Назначен мастер",
-    RequestStatus.IN_PROGRESS: "В работе",
-    RequestStatus.COMPLETED: "Работы завершены",
-    RequestStatus.READY_FOR_SIGN: "На согласовании",
-    RequestStatus.CLOSED: "Закрыта",
-    RequestStatus.CANCELLED: "Отменена",
-}
 REQUESTS_PAGE_SIZE = 10
 
 
@@ -416,6 +405,7 @@ async def _load_client_requests(session, client_id: int) -> list[Request]:
             await session.execute(
                 select(Request)
                 .options(
+                    selectinload(Request.object),
                     selectinload(Request.engineer),
                     selectinload(Request.master),
                 )
@@ -433,6 +423,7 @@ async def _load_request(session, client_id: int, request_id: int) -> Request | N
     return await session.scalar(
         select(Request)
         .options(
+            selectinload(Request.object),
             selectinload(Request.engineer),
             selectinload(Request.master),
             selectinload(Request.work_items),
