@@ -3239,6 +3239,10 @@ def _format_request_detail(request: Request) -> str:
             lines.append(f"• {start} — {finish} · {duration_str}")
             if session.notes:
                 lines.append(f"  → {session.notes}")
+    elif (request.actual_hours or 0) > 0:
+        lines.append("")
+        lines.append("⏱ <b>Время работы мастера</b>")
+        lines.append(f"• Суммарно: {format_hours_minutes(float(request.actual_hours or 0))} (учёт до внедрения сессий)")
 
     if request.contract:
         lines.append(f"Договор: {request.contract.number}")
