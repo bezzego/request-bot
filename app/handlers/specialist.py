@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import html
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
@@ -31,12 +31,13 @@ from app.keyboards.calendar import build_calendar, parse_calendar_callback, shif
 from app.services.request_service import RequestCreateData, RequestService
 from app.utils.pagination import clamp_page, total_pages_for
 from app.utils.request_filters import format_date_range_label, parse_date_range, quick_date_range
-from app.utils.request_formatters import format_request_label
+from app.utils.request_formatters import format_hours_minutes, format_request_label, STATUS_TITLES
 from app.utils.timezone import combine_moscow, format_moscow, now_moscow
 
 router = Router()
 
 SPEC_CALENDAR_PREFIX = "spec_inspection"
+SPEC_DUE_CALENDAR_PREFIX = "spec_due"
 REQUESTS_PAGE_SIZE = 10
 
 
@@ -89,22 +90,27 @@ async def _get_saved_objects(session, limit: int = 10) -> list[Object]:
 
 
 async def _get_saved_addresses(session, object_name: str | None = None, limit: int = 10) -> list[str]:
-    """Получает список ранее использованных адресов."""
+    """Получает список ранее использованных адресов (из заявок). Вручную введённые сохраняются в заявке и попадают сюда."""
     # Используем GROUP BY вместо DISTINCT, чтобы можно было сортировать по created_at
     if object_name:
-        # Если указан объект, ищем адреса для этого объекта
-        query = (
-            select(Request.address, func.max(Request.created_at).label('max_created_at'))
-            .join(Object, Request.object_id == Object.id)
-            .where(
-                Request.address.isnot(None),
-                func.lower(Object.name) == object_name.lower()
+        name_normalized = object_name.strip().lower()
+        if not name_normalized:
+            object_name = None
+        else:
+            query = (
+                select(Request.address, func.max(Request.created_at).label('max_created_at'))
+                .join(Object, Request.object_id == Object.id)
+                .where(
+                    Request.address.isnot(None),
+                    func.lower(Object.name) == name_normalized,
+                )
+                .group_by(Request.address)
+                .order_by(func.max(Request.created_at).desc())
+                .limit(limit)
             )
-            .group_by(Request.address)
-            .order_by(func.max(Request.created_at).desc())
-            .limit(limit)
-        )
-    else:
+            result = await session.execute(query)
+            return [row[0] for row in result.all() if row[0]]
+    if object_name is None or not (object_name or "").strip():
         query = (
             select(Request.address, func.max(Request.created_at).label('max_created_at'))
             .where(Request.address.isnot(None))
@@ -112,9 +118,29 @@ async def _get_saved_addresses(session, object_name: str | None = None, limit: i
             .order_by(func.max(Request.created_at).desc())
             .limit(limit)
         )
-    
-    result = await session.execute(query)
-    return [row[0] for row in result.all() if row[0]]
+        result = await session.execute(query)
+        return [row[0] for row in result.all() if row[0]]
+    return []
+
+
+async def _get_addresses_for_keyboard(session, object_name: str | None, limit: int = 15) -> list[str]:
+    """Адреса для кнопок: сначала по текущему объекту, затем недавние по всем объектам (в т.ч. введённые вручную)."""
+    seen = set()
+    result: list[str] = []
+    name = (object_name or "").strip() or None
+    for addr in await _get_saved_addresses(session, object_name=name, limit=limit):
+        if addr and addr not in seen:
+            seen.add(addr)
+            result.append(addr)
+    if len(result) >= limit:
+        return result
+    for addr in await _get_saved_addresses(session, object_name=None, limit=limit * 2):
+        if addr and addr not in seen:
+            seen.add(addr)
+            result.append(addr)
+            if len(result) >= limit:
+                break
+    return result
 
 
 def _defect_type_keyboard(defect_types: list[DefectType]):
@@ -168,6 +194,7 @@ class NewRequestStates(StatesGroup):
     inspection_time = State()
     inspection_location = State()
     engineer = State()
+    due_date = State()
     letter = State()
     confirmation = State()
 
@@ -448,6 +475,7 @@ async def specialist_request_detail(callback: CallbackQuery):
                 selectinload(Request.engineer),
                 selectinload(Request.master),
                 selectinload(Request.work_items),
+                selectinload(Request.work_sessions),
                 selectinload(Request.photos),
                 selectinload(Request.acts),
                 selectinload(Request.feedback),
@@ -468,7 +496,9 @@ async def specialist_request_detail(callback: CallbackQuery):
     # Если специалист/суперадмин является инженером на этой заявке, показываем кнопки инженера
     if is_engineer:
         builder.button(text="🗓 Назначить осмотр", callback_data=f"eng:schedule:{request.id}")
-        builder.button(text="✅ Осмотр выполнен", callback_data=f"eng:inspect:{request.id}")
+        if not request.inspection_completed_at:
+            builder.button(text="✅ Осмотр выполнен", callback_data=f"eng:inspect:{request.id}")
+        builder.button(text="⏱ Плановые часы", callback_data=f"eng:set_planned_hours:{request.id}")
         builder.button(text="➕ Плановая позиция", callback_data=f"eng:add_plan:{request.id}")
         builder.button(text="✏️ Обновить факт", callback_data=f"eng:update_fact:{request.id}")
         builder.button(text="⏱ Срок устранения", callback_data=f"eng:set_term:{request.id}")
@@ -1037,8 +1067,8 @@ async def handle_object_choice(callback: CallbackQuery, state: FSMContext):
                     await state.update_data(object_name=object_name)
                     await callback.message.edit_text(f"ЖК: {object_name}")
                     
-                    # Показываем сохранённые адреса для этого ЖК
-                    saved_addresses = await _get_saved_addresses(session, object_name=object_name, limit=10)
+                    # Кнопки: адреса по этому объекту + недавние (в т.ч. введённые вручную)
+                    saved_addresses = await _get_addresses_for_keyboard(session, object_name=object_name)
                     
                     if saved_addresses:
                         await state.update_data(saved_addresses=saved_addresses)
@@ -1071,9 +1101,9 @@ async def handle_object(message: Message, state: FSMContext):
     object_name = message.text.strip()
     await state.update_data(object_name=object_name)
     
-    # Показываем сохранённые адреса для этого ЖК
+    # Кнопки: адреса по этому объекту + недавние (в т.ч. введённые вручную)
     async with async_session() as session:
-        saved_addresses = await _get_saved_addresses(session, object_name=object_name, limit=10)
+        saved_addresses = await _get_addresses_for_keyboard(session, object_name=object_name)
     
     if saved_addresses:
         # Сохраняем адреса в state для использования в callback
@@ -1425,7 +1455,7 @@ async def handle_engineer_callback(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Выбранный пользователь не может быть назначен инженером.", show_alert=True)
             return
     
-    await state.update_data(engineer_id=engineer_id, remedy_term_days=14)
+    await state.update_data(engineer_id=engineer_id)
     await state.set_state(NewRequestStates.letter)
     try:
         await callback.message.edit_reply_markup()
@@ -1501,6 +1531,7 @@ async def confirm_request(callback: CallbackQuery, state: FSMContext):
                 await session.flush()
 
         try:
+            # Срок устранения указывает только инженер, не специалист
             create_data = RequestCreateData(
                 title=data["title"],
                 description=data["description"],
@@ -1515,7 +1546,7 @@ async def confirm_request(callback: CallbackQuery, state: FSMContext):
                 inspection_location=data.get("inspection_location"),
                 specialist_id=data["specialist_id"],
                 engineer_id=data["engineer_id"],
-                remedy_term_days=data.get("remedy_term_days", 14),
+                due_at=None,
             )
             request = await RequestService.create_request(session, create_data)
 
@@ -1600,6 +1631,12 @@ def _build_request_summary(data: dict) -> str:
     inspection_dt = data.get("inspection_datetime")
     inspection_text = format_moscow(inspection_dt) or "не указан"
 
+    due_at_raw = data.get("due_at")
+    due_at = (
+        datetime.fromisoformat(due_at_raw) if isinstance(due_at_raw, str) else due_at_raw
+    )
+    due_text = format_moscow(due_at, "%d.%m.%Y") if due_at else "—"
+
     letter_text = "приложено" if data.get("letter_file_id") else "нет"
 
     apartment_text = data.get('apartment') or '—'
@@ -1614,23 +1651,10 @@ def _build_request_summary(data: dict) -> str:
         f"🔹 Тип дефекта: {data.get('defect_type') or '—'}\n"
         f"🔹 Осмотр: {inspection_text}\n"
         f"🔹 Место осмотра: {data.get('inspection_location') or 'адрес объекта'}\n"
-        f"🔹 Срок устранения: {data.get('remedy_term_days', 14)} дней\n"
+        f"🔹 Срок устранения: {due_text} (установит инженер)\n"
         f"🔹 Письмо: {letter_text}\n\n"
         "Нажмите кнопку ниже для подтверждения или отмены создания заявки."
     )
-
-STATUS_TITLES = {
-    RequestStatus.NEW: "Новая",
-    RequestStatus.INSPECTION_SCHEDULED: "Назначен осмотр",
-    RequestStatus.INSPECTED: "Осмотр выполнен",
-    RequestStatus.ASSIGNED: "Назначен мастер",
-    RequestStatus.IN_PROGRESS: "В работе",
-    RequestStatus.COMPLETED: "Работы завершены",
-    RequestStatus.READY_FOR_SIGN: "Ожидает подписания",
-    RequestStatus.CLOSED: "Закрыта",
-    RequestStatus.CANCELLED: "Отменена",
-}
-
 
 def _specialist_filter_conditions(filter_payload: dict[str, str] | None) -> list:
     if not filter_payload:
@@ -1711,6 +1735,7 @@ async def _fetch_specialist_requests_page(
             await session.execute(
                 select(Request)
                 .options(
+                    selectinload(Request.object),
                     selectinload(Request.engineer),
                     selectinload(Request.master),
                     selectinload(Request.work_items),
@@ -1760,7 +1785,7 @@ async def _show_specialist_requests_list(
     ctx_key = "filter" if context == "filter" else "list"
     start_index = page * REQUESTS_PAGE_SIZE
     for idx, req in enumerate(requests, start=start_index + 1):
-        status = req.status.value
+        status = STATUS_TITLES.get(req.status, req.status.value)
         if context == "filter":
             detail_cb = f"spec:detail:{req.id}:f:{page}"
         else:
@@ -1814,6 +1839,7 @@ async def _load_specialist_requests(session, specialist_id: int) -> list[Request
             await session.execute(
                 select(Request)
                 .options(
+                    selectinload(Request.object),
                     selectinload(Request.engineer),
                     selectinload(Request.master),
                     selectinload(Request.work_items),
@@ -1862,10 +1888,29 @@ def _format_specialist_request_detail(request: Request) -> str:
         f"Фактическая стоимость видов работ: {_format_currency(cost_breakdown['actual_work_cost'])} ₽",
         f"Фактическая стоимость материалов: {_format_currency(cost_breakdown['actual_material_cost'])} ₽",
         f"Фактическая общая стоимость: {_format_currency(cost_breakdown['actual_total_cost'])} ₽",
-        f"Плановые часы: {_format_hours(planned_hours)}",
-        f"Фактические часы: {_format_hours(actual_hours)}",
-        f"Δ Часы: {_format_hours(hours_delta)}",
+        f"Плановые часы: {format_hours_minutes(planned_hours)}",
+        f"Фактические часы: {format_hours_minutes(actual_hours)}",
+        f"Δ Часы: {format_hours_minutes(hours_delta, signed=True)}",
     ]
+
+    if request.work_sessions:
+        lines.append("")
+        lines.append("⏱ <b>Время работы мастера</b>")
+        for session in sorted(request.work_sessions, key=lambda ws: ws.started_at):
+            start = format_moscow(session.started_at, "%d.%m %H:%M") or "—"
+            finish = format_moscow(session.finished_at, "%d.%m %H:%M") if session.finished_at else "в работе"
+            duration_h = (
+                float(session.hours_reported)
+                if session.hours_reported is not None
+                else (float(session.hours_calculated) if session.hours_calculated is not None else None)
+            )
+            if duration_h is None and session.started_at and session.finished_at:
+                delta = session.finished_at - session.started_at
+                duration_h = delta.total_seconds() / 3600
+            duration_str = format_hours_minutes(duration_h) if duration_h is not None else "—"
+            lines.append(f"• {start} — {finish} · {duration_str}")
+            if session.notes:
+                lines.append(f"  → {session.notes}")
 
     if request.contract:
         lines.append(f"Договор: {request.contract.number}")
@@ -1969,9 +2014,8 @@ def _format_currency(value: float | None) -> str:
 
 
 def _format_hours(value: float | None) -> str:
-    if value is None:
-        return "0.0 ч"
-    return f"{float(value):.1f} ч"
+    """Форматирует часы для аналитики (часы и минуты)."""
+    return format_hours_minutes(value)
 
 
 def _build_specialist_analytics(requests: list[Request]) -> str:
@@ -2009,9 +2053,9 @@ def _build_specialist_analytics(requests: list[Request]) -> str:
         f"Плановый бюджет суммарно: {_format_currency(planned_budget)} ₽",
         f"Фактический бюджет суммарно: {_format_currency(actual_budget)} ₽",
         f"Δ Бюджет: {_format_currency(actual_budget - planned_budget)} ₽",
-        f"Плановые часы суммарно: {_format_hours(planned_hours)}",
-        f"Фактические часы суммарно: {_format_hours(actual_hours)}",
-        f"Средняя длительность закрытой заявки: {_format_hours(avg_duration)}",
+        f"Плановые часы суммарно: {format_hours_minutes(planned_hours)}",
+        f"Фактические часы суммарно: {format_hours_minutes(actual_hours)}",
+        f"Средняя длительность закрытой заявки: {format_hours_minutes(avg_duration)}",
     ]
 
     if status_counter:

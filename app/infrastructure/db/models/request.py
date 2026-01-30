@@ -73,6 +73,7 @@ class Request(Base):
 
     planned_budget: Mapped[float | None] = mapped_column(Numeric(12, 2))
     actual_budget: Mapped[float | None] = mapped_column(Numeric(12, 2))
+    engineer_planned_hours: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     planned_hours: Mapped[float | None] = mapped_column(Numeric(10, 2))
     actual_hours: Mapped[float | None] = mapped_column(Numeric(10, 2))
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -45,7 +45,7 @@ from app.services.request_service import RequestCreateData, RequestService
 from app.services.work_catalog import get_work_catalog
 from app.utils.pagination import clamp_page, total_pages_for
 from app.utils.request_filters import format_date_range_label, parse_date_range, quick_date_range
-from app.utils.request_formatters import format_request_label
+from app.utils.request_formatters import format_hours_minutes, format_request_label, STATUS_TITLES
 from app.utils.timezone import combine_moscow, format_moscow, now_moscow
 
 router = Router()
@@ -65,6 +65,7 @@ class EngineerStates(StatesGroup):
     # Состояния для ввода количества вручную
     quantity_input_plan = State()  # Ввод количества для плана
     quantity_input_fact = State()  # Ввод количества для факта
+    planned_hours_input = State()  # Ввод плановых часов (число)
 
 
 class EngineerCreateStates(StatesGroup):
@@ -80,19 +81,6 @@ class EngineerCreateStates(StatesGroup):
 class EngineerFilterStates(StatesGroup):
     mode = State()
     value = State()
-
-
-STATUS_TITLES = {
-    RequestStatus.NEW: "Новая",
-    RequestStatus.INSPECTION_SCHEDULED: "Назначен осмотр",
-    RequestStatus.INSPECTED: "Осмотр выполнен",
-    RequestStatus.ASSIGNED: "Назначен мастер",
-    RequestStatus.IN_PROGRESS: "В работе",
-    RequestStatus.COMPLETED: "Работы завершены",
-    RequestStatus.READY_FOR_SIGN: "Ожидает подписания",
-    RequestStatus.CLOSED: "Закрыта",
-    RequestStatus.CANCELLED: "Отменена",
-}
 
 
 def _engineer_filter_conditions(filter_payload: dict[str, str] | None) -> list:
@@ -2789,6 +2777,7 @@ async def _load_request(session, engineer_id: int, request_id: int) -> Request |
             selectinload(Request.contract),
             selectinload(Request.defect_type),
             selectinload(Request.work_items),
+            selectinload(Request.work_sessions),
             selectinload(Request.master),
             selectinload(Request.engineer),
             selectinload(Request.specialist),
@@ -2851,6 +2840,7 @@ def _detail_keyboard(
     builder = InlineKeyboardBuilder()
     builder.button(text="🗓 Назначить осмотр", callback_data=f"eng:schedule:{request_id}")
     builder.button(text="✅ Осмотр выполнен", callback_data=f"eng:inspect:{request_id}")
+    builder.button(text="⏱ Плановые часы", callback_data=f"eng:set_planned_hours:{request_id}")
     builder.button(text="➕ Плановая позиция", callback_data=f"eng:add_plan:{request_id}")
     builder.button(text="✏️ Обновить факт", callback_data=f"eng:update_fact:{request_id}")
     builder.button(text="⏱ Срок устранения", callback_data=f"eng:set_term:{request_id}")
@@ -2866,6 +2856,87 @@ def _detail_keyboard(
     return builder.as_markup()
 
 
+@router.callback_query(F.data.startswith("eng:set_planned_hours:"))
+async def engineer_set_planned_hours_start(callback: CallbackQuery, state: FSMContext):
+    """Старт ввода плановых часов: просим ввести число часов."""
+    request_id = int(callback.data.split(":")[2])
+    async with async_session() as session:
+        engineer = await _get_engineer(session, callback.from_user.id)
+        if not engineer:
+            await callback.answer("Нет доступа к заявке.", show_alert=True)
+            return
+        request = await _load_request(session, engineer.id, request_id)
+        if not request:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+            return
+        current = format_hours_minutes(float(request.engineer_planned_hours or 0))
+
+    await state.set_state(EngineerStates.planned_hours_input)
+    await state.update_data(planned_hours_request_id=request_id)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.message.answer(
+        f"Введите плановые часы (число, например 2 или 2.5).\n"
+        f"Сейчас указано: {current}\n\n"
+        "Для отмены отправьте «Отмена»."
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(EngineerStates.planned_hours_input))
+async def engineer_planned_hours_input(message: Message, state: FSMContext):
+    """Обработка введённых плановых часов."""
+    text = (message.text or "").strip()
+    if text.lower() == "отмена":
+        await state.clear()
+        await message.answer("Ввод отменён.")
+        return
+
+    try:
+        hours = float(text.replace(",", "."))
+    except ValueError:
+        await message.answer("Введите число (например 2 или 2.5). Для отмены — «Отмена».")
+        return
+
+    if hours < 0:
+        await message.answer("Число часов не может быть отрицательным. Введите число ≥ 0.")
+        return
+
+    data = await state.get_data()
+    request_id = data.get("planned_hours_request_id")
+    if not request_id:
+        await state.clear()
+        await message.answer("Сессия истекла. Откройте карточку заявки снова.")
+        return
+
+    async with async_session() as session:
+        engineer = await _get_engineer(session, message.from_user.id)
+        if not engineer:
+            await state.clear()
+            await message.answer("Нет доступа к заявке.")
+            return
+        request = await _load_request(session, engineer.id, request_id)
+        if not request:
+            await state.clear()
+            await message.answer("Заявка не найдена.")
+            return
+
+        await RequestService.set_engineer_planned_hours(session, request, hours)
+        await session.commit()
+        label = format_request_label(request)
+
+    await state.clear()
+    await message.answer(
+        f"Плановые часы для заявки {label} установлены: {format_hours_minutes(hours)}."
+    )
+    await _refresh_request_detail(message.bot, message.chat.id, message.from_user.id, request_id)
+
+
+ENGINEER_TERM_CALENDAR_PREFIX = "eng_term"
+
+
 @router.callback_query(F.data.startswith("eng:set_term:"))
 async def engineer_set_remedy_term(callback: CallbackQuery):
     request_id = int(callback.data.split(":")[2])
@@ -2878,49 +2949,67 @@ async def engineer_set_remedy_term(callback: CallbackQuery):
         if not request:
             await callback.answer("Заявка не найдена.", show_alert=True)
             return
-        current = request.remedy_term_days
+        current_text = format_moscow(request.due_at, "%d.%m.%Y") if request.due_at else "не задан"
 
-    builder = InlineKeyboardBuilder()
-    for days in (14, 30):
-        builder.button(text=f"{days} дней", callback_data=f"eng:set_term_value:{request_id}:{days}")
-    builder.button(text="⬅️ Назад", callback_data=f"eng:detail:{request_id}")
-    builder.adjust(1)
-
+    prefix = f"{ENGINEER_TERM_CALENDAR_PREFIX}_{request_id}"
     await callback.message.answer(
-        f"Выберите срок устранения (сейчас {current} дней):",
-        reply_markup=builder.as_markup(),
+        f"Выберите срок устранения (дату). Сейчас: {current_text}",
+        reply_markup=build_calendar(prefix),
     )
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("eng:set_term_value:"))
-async def engineer_set_remedy_term_value(callback: CallbackQuery):
-    _, _, request_id_str, days_str = callback.data.split(":")
-    try:
-        request_id = int(request_id_str)
-        days = int(days_str)
-    except ValueError:
-        await callback.answer("Некорректный срок.", show_alert=True)
+@router.callback_query(F.data.startswith(f"cal:{ENGINEER_TERM_CALENDAR_PREFIX}_"))
+async def engineer_set_term_calendar(callback: CallbackQuery):
+    """Обработка календаря выбора срока устранения (инженер/менеджер)."""
+    payload = parse_calendar_callback(callback.data)
+    if not payload:
+        await callback.answer()
         return
 
-    async with async_session() as session:
-        engineer = await _get_engineer(session, callback.from_user.id)
-        if not engineer:
-            await callback.answer("Нет доступа к заявке.", show_alert=True)
-            return
+    try:
+        request_id = int(payload.prefix.split("_")[-1])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка.", show_alert=True)
+        return
 
-        request = await _load_request(session, engineer.id, request_id)
-        if not request:
-            await callback.answer("Заявка не найдена.", show_alert=True)
-            return
+    if payload.action in {"prev", "next"}:
+        new_year, new_month = shift_month(payload.year, payload.month, payload.action)
+        await callback.message.edit_reply_markup(
+            reply_markup=build_calendar(payload.prefix, year=new_year, month=new_month)
+        )
+        await callback.answer()
+        return
 
-        await RequestService.set_remedy_term(session, request, days)
-        await session.commit()
-        label = format_request_label(request)
+    if payload.action == "day" and payload.day:
+        async with async_session() as session:
+            engineer = await _get_engineer(session, callback.from_user.id)
+            if not engineer:
+                await callback.answer("Нет доступа к заявке.", show_alert=True)
+                return
+            request = await _load_request(session, engineer.id, request_id)
+            if not request:
+                await callback.answer("Заявка не найдена.", show_alert=True)
+                return
 
-    await callback.answer("Срок сохранён.")
-    await callback.message.answer(f"Срок устранения для заявки {label} установлен: {days} дней.")
-    await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
+            selected = date(payload.year, payload.month, payload.day)
+            due_at = combine_moscow(selected, time(23, 59, 59))
+            await RequestService.set_due_date(session, request, due_at)
+            await session.commit()
+            label = format_request_label(request)
+
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await callback.answer("Срок сохранён.")
+        await callback.message.answer(
+            f"Срок устранения для заявки {label} установлен: {selected.strftime('%d.%m.%Y')}."
+        )
+        await _refresh_request_detail(callback.bot, callback.message.chat.id, callback.from_user.id, request_id)
+        return
+
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("eng:photos:"))
@@ -3098,10 +3187,29 @@ def _format_request_detail(request: Request) -> str:
         f"Фактическая стоимость видов работ: {_format_currency(cost_breakdown['actual_work_cost'])} ₽",
         f"Фактическая стоимость материалов: {_format_currency(cost_breakdown['actual_material_cost'])} ₽",
         f"Фактическая общая стоимость: {_format_currency(cost_breakdown['actual_total_cost'])} ₽",
-        f"Плановые часы: {_format_hours(planned_hours)}",
-        f"Фактические часы: {_format_hours(actual_hours)}",
-        f"Δ Часы: {_format_hours(hours_delta)}",
+        f"Плановые часы: {format_hours_minutes(planned_hours)}",
+        f"Фактические часы: {format_hours_minutes(actual_hours)}",
+        f"Δ Часы: {format_hours_minutes(hours_delta, signed=True)}",
     ]
+
+    if request.work_sessions:
+        lines.append("")
+        lines.append("⏱ <b>Время работы мастера</b>")
+        for session in sorted(request.work_sessions, key=lambda ws: ws.started_at):
+            start = format_moscow(session.started_at, "%d.%m %H:%M") or "—"
+            finish = format_moscow(session.finished_at, "%d.%m %H:%M") if session.finished_at else "в работе"
+            duration_h = (
+                float(session.hours_reported)
+                if session.hours_reported is not None
+                else (float(session.hours_calculated) if session.hours_calculated is not None else None)
+            )
+            if duration_h is None and session.started_at and session.finished_at:
+                delta = session.finished_at - session.started_at
+                duration_h = delta.total_seconds() / 3600
+            duration_str = format_hours_minutes(duration_h) if duration_h is not None else "—"
+            lines.append(f"• {start} — {finish} · {duration_str}")
+            if session.notes:
+                lines.append(f"  → {session.notes}")
 
     if request.contract:
         lines.append(f"Договор: {request.contract.number}")
@@ -3136,7 +3244,7 @@ def _format_request_detail(request: Request) -> str:
             )
             if item.actual_hours is not None:
                 lines.append(
-                    f"  Часы: {_format_hours(item.planned_hours)} → {_format_hours(item.actual_hours)}"
+                    f"  Часы: {format_hours_minutes(item.planned_hours)} → {format_hours_minutes(item.actual_hours)}"
                 )
             if item.notes:
                 lines.append(f"  → {item.notes}")
@@ -3191,9 +3299,7 @@ def _format_currency(value: float | None) -> str:
 
 
 def _format_hours(value: float | None) -> str:
-    if value is None:
-        return "0.0 ч"
-    return f"{float(value):.1f} ч"
+    return format_hours_minutes(value)
 
 
 def _build_engineer_analytics(requests: Sequence[Request]) -> str:
@@ -3237,8 +3343,8 @@ def _build_engineer_analytics(requests: Sequence[Request]) -> str:
         f"Плановый бюджет: {_format_currency(planned_budget)} ₽",
         f"Фактический бюджет: {_format_currency(actual_budget)} ₽",
         f"Δ Бюджет: {_format_currency(actual_budget - planned_budget)} ₽",
-        f"Плановые часы: {_format_hours(planned_hours)}",
-        f"Фактические часы: {_format_hours(actual_hours)}",
+        f"Плановые часы: {format_hours_minutes(planned_hours)}",
+        f"Фактические часы: {format_hours_minutes(actual_hours)}",
     ]
 
     if upcoming:

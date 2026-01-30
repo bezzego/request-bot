@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from app.infrastructure.db.models import Request, RequestReminder, RequestStatus
 from app.infrastructure.db.session import async_session
-from app.utils.request_formatters import format_request_label
+from app.utils.request_formatters import format_request_label, STATUS_TITLES
 from app.utils.timezone import format_moscow, now_moscow
 
 
@@ -162,16 +162,3 @@ class ReminderScheduler:
                 pass
 
             await asyncio.sleep(self.interval_seconds)
-
-
-STATUS_TITLES = {
-    RequestStatus.NEW: "Новая",
-    RequestStatus.INSPECTION_SCHEDULED: "Назначен осмотр",
-    RequestStatus.INSPECTED: "Осмотр выполнен",
-    RequestStatus.ASSIGNED: "Назначен мастер",
-    RequestStatus.IN_PROGRESS: "В работе",
-    RequestStatus.COMPLETED: "Работы завершены",
-    RequestStatus.READY_FOR_SIGN: "Ожидает подписания",
-    RequestStatus.CLOSED: "Закрыта",
-    RequestStatus.CANCELLED: "Отменена",
-}
