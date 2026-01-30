@@ -1060,15 +1060,19 @@ class RequestService:
 
     @staticmethod
     async def _get_or_create_object(session: AsyncSession, name: str, address: str | None) -> Object:
-        stmt = select(Object).where(func.lower(Object.name) == name.lower())
+        stmt = select(Object).where(Object.name == name)
         result = await session.execute(stmt)
         obj = result.scalars().first()
         if obj:
             return obj
-        obj = Object(name=name, address=address)
-        session.add(obj)
+        await session.execute(
+            insert(Object)
+            .values(name=name, address=address, created_at=now_moscow())
+            .on_conflict_do_nothing(index_elements=["name"])
+        )
         await session.flush()
-        return obj
+        result = await session.execute(select(Object).where(Object.name == name))
+        return result.scalars().one()
 
     @staticmethod
     async def _get_or_create_contract(

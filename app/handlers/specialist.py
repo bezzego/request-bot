@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 from datetime import date, datetime
 
 from aiogram import F, Router
@@ -1537,8 +1538,9 @@ async def confirm_request(callback: CallbackQuery, state: FSMContext):
             due_at = request.due_at
         except Exception as e:
             await session.rollback()
+            safe_msg = html.escape(str(e))
             await callback.message.answer(
-                f"❌ Ошибка при создании заявки: {str(e)}\n"
+                f"❌ Ошибка при создании заявки: {safe_msg}\n"
                 "Попробуйте создать заявку заново или обратитесь к администратору."
             )
             await state.clear()
