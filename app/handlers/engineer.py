@@ -232,10 +232,10 @@ async def _show_engineer_requests_list(
             text=f"{idx}. {format_request_label(req)} · {status_text}",
             callback_data=detail_cb,
         )
-        # Справа от заявки — маленькая кнопка удаления (безвозвратно из БД)
+        # Под кнопкой заявки — корзинка удаления (безвозвратно из БД)
         if req.status not in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
             builder.button(text="🗑", callback_data=f"eng:delete:{req.id}:{ctx_key}:{page}")
-    builder.adjust(2)  # заявка и 🗑 в одну строку
+    builder.adjust(1)  # заявка — строка, под ней корзинка
 
     if total_pages > 1:
         nav = []
