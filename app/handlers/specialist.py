@@ -542,7 +542,7 @@ async def specialist_request_detail(callback: CallbackQuery):
     
     # Кнопка удаления заявки (безвозвратно из БД); из карточки — возврат в карточку при отмене
     ctx_key = "filter" if context == "filter" else "list"
-    if request.status not in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
+    if request.status != RequestStatus.CLOSED:
         builder.button(text="🗑 Удалить", callback_data=f"spec:delete:{request.id}:detail")
 
     back_callback = f"spec:list:{page}" if context == "list" else f"spec:filter:{page}"
@@ -583,8 +583,8 @@ async def specialist_delete_prompt(callback: CallbackQuery):
     if not request:
         await callback.answer("Заявка не найдена.", show_alert=True)
         return
-    if request.status in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
-        await callback.answer("Заявка уже закрыта или отменена.", show_alert=True)
+    if request.status == RequestStatus.CLOSED:
+        await callback.answer("Заявка уже закрыта.", show_alert=True)
         return
     label = format_request_label(request)
     builder = InlineKeyboardBuilder()
@@ -620,8 +620,8 @@ async def specialist_delete_confirm(callback: CallbackQuery, state: FSMContext):
         if not request:
             await callback.answer("Заявка не найдена.", show_alert=True)
             return
-        if request.status in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
-            await callback.answer("Заявка уже закрыта или отменена.", show_alert=True)
+        if request.status == RequestStatus.CLOSED:
+            await callback.answer("Заявка уже закрыта.", show_alert=True)
             return
         await RequestService.delete_request(session, request)
         await session.commit()
@@ -1795,7 +1795,7 @@ async def _show_specialist_requests_list(
             callback_data=detail_cb,
         )
         # Под кнопкой заявки — корзинка удаления (безвозвратно из БД)
-        if req.status not in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
+        if req.status != RequestStatus.CLOSED:
             builder.button(text="🗑", callback_data=f"spec:delete:{req.id}:{ctx_key}:{page}")
     builder.adjust(1)  # заявка — строка, под ней корзинка
 

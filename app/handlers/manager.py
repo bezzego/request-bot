@@ -192,7 +192,7 @@ async def _show_manager_requests_list(
             callback_data=detail_cb,
         )
         # Под кнопкой заявки — корзинка удаления (безвозвратно из БД)
-        if req.status not in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
+        if req.status != RequestStatus.CLOSED:
             builder.button(text="🗑", callback_data=f"manager:delete:{req.id}:{ctx_key}:{page}")
     builder.adjust(1)  # заявка — строка, под ней корзинка
 
@@ -1011,7 +1011,7 @@ async def manager_request_detail(callback: CallbackQuery):
                 callback_data=f"manager:close_info:{request.id}",
             )
         
-        if request.status not in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
+        if request.status != RequestStatus.CLOSED:
             builder.button(text="🗑 Удалить", callback_data=f"manager:delete:{request.id}:detail:{context}:{page}")
         
         back_cb = f"manager:list:{context}:{page}"
@@ -1079,8 +1079,8 @@ async def manager_delete_prompt(callback: CallbackQuery):
     if not request:
         await callback.answer("Заявка не найдена.", show_alert=True)
         return
-    if request.status in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
-        await callback.answer("Заявка уже закрыта или отменена.", show_alert=True)
+    if request.status == RequestStatus.CLOSED:
+        await callback.answer("Заявка уже закрыта.", show_alert=True)
         return
     label = format_request_label(request)
     builder = InlineKeyboardBuilder()
@@ -1116,8 +1116,8 @@ async def manager_delete_confirm(callback: CallbackQuery, state: FSMContext):
         if not request:
             await callback.answer("Заявка не найдена.", show_alert=True)
             return
-        if request.status in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
-            await callback.answer("Заявка уже закрыта или отменена.", show_alert=True)
+        if request.status == RequestStatus.CLOSED:
+            await callback.answer("Заявка уже закрыта.", show_alert=True)
             return
         await RequestService.delete_request(session, request)
         await session.commit()

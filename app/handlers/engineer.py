@@ -221,7 +221,7 @@ async def _show_engineer_requests_list(
             callback_data=detail_cb,
         )
         # Под кнопкой заявки — корзинка удаления (безвозвратно из БД)
-        if req.status not in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
+        if req.status != RequestStatus.CLOSED:
             builder.button(text="🗑", callback_data=f"eng:delete:{req.id}:{ctx_key}:{page}")
     builder.adjust(1)  # заявка — строка, под ней корзинка
 
@@ -788,8 +788,8 @@ async def engineer_delete_prompt(callback: CallbackQuery):
     if not request:
         await callback.answer("Заявка не найдена.", show_alert=True)
         return
-    if request.status in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
-        await callback.answer("Заявка уже закрыта или отменена.", show_alert=True)
+    if request.status == RequestStatus.CLOSED:
+        await callback.answer("Заявка уже закрыта.", show_alert=True)
         return
     label = format_request_label(request)
     builder = InlineKeyboardBuilder()
@@ -823,8 +823,8 @@ async def engineer_delete_confirm(callback: CallbackQuery, state: FSMContext):
         if not request:
             await callback.answer("Заявка не найдена.", show_alert=True)
             return
-        if request.status in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
-            await callback.answer("Заявка уже закрыта или отменена.", show_alert=True)
+        if request.status == RequestStatus.CLOSED:
+            await callback.answer("Заявка уже закрыта.", show_alert=True)
             return
         await RequestService.delete_request(session, request)
         await session.commit()
@@ -2853,7 +2853,7 @@ def _detail_keyboard(
     builder.button(text="📄 Готово к подписанию", callback_data=f"eng:ready:{request_id}")
     if request and request.photos:
         builder.button(text="📷 Просмотреть фото", callback_data=f"eng:photos:{request_id}")
-    if request and request.status not in (RequestStatus.CLOSED, RequestStatus.CANCELLED):
+    if request and request.status != RequestStatus.CLOSED:
         builder.button(text="🗑 Удалить", callback_data=f"eng:delete:{request_id}:detail")
     back_cb = f"eng:list:{list_page}" if list_context == "list" else f"eng:filter:{list_page}"
     builder.button(text="⬅️ Назад к списку", callback_data=back_cb)
