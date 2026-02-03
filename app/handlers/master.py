@@ -2455,6 +2455,8 @@ def _format_request_detail(request: Request) -> str:
         f"Статус: {status_title}",
         f"Срок устранения: {due_text}",
         f"Адрес: {request.address}",
+        f"Контактное лицо: {request.contact_person or '—'}",
+        f"Телефон: {request.contact_phone or '—'}",
         "",
         f"Плановая стоимость видов работ: {_format_currency(cost_breakdown['planned_work_cost'])} ₽",
         f"Плановая стоимость материалов: {_format_currency(cost_breakdown['planned_material_cost'])} ₽",
