@@ -37,6 +37,13 @@ from app.utils.pagination import clamp_page, total_pages_for
 from app.utils.request_filters import format_date_range_label, parse_date_range, quick_date_range
 from app.utils.request_formatters import format_hours_minutes, format_request_label, get_request_status_title
 from app.utils.timezone import now_moscow
+from app.utils.advanced_filters import (
+    build_filter_conditions,
+    format_filter_label,
+    get_available_objects,
+    DateFilterMode,
+)
+from typing import Any
 
 router = Router()
 REQUESTS_PAGE_SIZE = 10
@@ -53,45 +60,59 @@ class ManagerFilterStates(StatesGroup):
     value = State()
 
 
-def _manager_filter_conditions(filter_payload: dict[str, str] | None) -> list:
+def _manager_filter_conditions(filter_payload: dict[str, Any] | None) -> list:
+    """Строит условия фильтрации для заявок менеджера."""
     if not filter_payload:
         return []
-    mode = (filter_payload.get("mode") or "").strip().lower()
-    value = (filter_payload.get("value") or "").strip()
-    conditions: list = []
-    if mode == "адрес" and value:
-        conditions.append(func.lower(Request.address).like(f"%{value.lower()}%"))
-    elif mode == "дата":
-        start = filter_payload.get("start")
-        end = filter_payload.get("end")
-        if start and end:
-            try:
-                start_dt = datetime.fromisoformat(start)
-                end_dt = datetime.fromisoformat(end)
-                conditions.append(Request.created_at.between(start_dt, end_dt))
-            except ValueError:
-                pass
-    return conditions
+    
+    # Поддержка старого формата фильтра для обратной совместимости
+    if "mode" in filter_payload:
+        mode = (filter_payload.get("mode") or "").strip().lower()
+        value = (filter_payload.get("value") or "").strip()
+        conditions: list = []
+        if mode == "адрес" and value:
+            conditions.append(func.lower(Request.address).like(f"%{value.lower()}%"))
+        elif mode == "дата":
+            start = filter_payload.get("start")
+            end = filter_payload.get("end")
+            if start and end:
+                try:
+                    start_dt = datetime.fromisoformat(start)
+                    end_dt = datetime.fromisoformat(end)
+                    conditions.append(Request.created_at.between(start_dt, end_dt))
+                except ValueError:
+                    pass
+        return conditions
+    
+    # Новый формат фильтра
+    return build_filter_conditions(filter_payload)
 
 
-def _manager_filter_label(filter_payload: dict[str, str] | None) -> str:
+def _manager_filter_label(filter_payload: dict[str, Any] | None) -> str:
+    """Форматирует описание фильтра для отображения."""
     if not filter_payload:
         return ""
-    mode = (filter_payload.get("mode") or "").strip().lower()
-    if mode == "адрес":
-        value = (filter_payload.get("value") or "").strip()
-        return f"адрес: {value}" if value else ""
-    if mode == "дата":
-        start = filter_payload.get("start")
-        end = filter_payload.get("end")
-        if start and end:
-            try:
-                start_dt = datetime.fromisoformat(start)
-                end_dt = datetime.fromisoformat(end)
-                return f"дата: {format_date_range_label(start_dt, end_dt)}"
-            except ValueError:
-                return ""
-    return ""
+    
+    # Поддержка старого формата фильтра для обратной совместимости
+    if "mode" in filter_payload:
+        mode = (filter_payload.get("mode") or "").strip().lower()
+        if mode == "адрес":
+            value = (filter_payload.get("value") or "").strip()
+            return f"адрес: {value}" if value else ""
+        if mode == "дата":
+            start = filter_payload.get("start")
+            end = filter_payload.get("end")
+            if start and end:
+                try:
+                    start_dt = datetime.fromisoformat(start)
+                    end_dt = datetime.fromisoformat(end)
+                    return f"дата: {format_date_range_label(start_dt, end_dt)}"
+                except ValueError:
+                    return ""
+        return ""
+    
+    # Новый формат фильтра
+    return format_filter_label(filter_payload)
 
 
 def _manager_filter_menu_keyboard() -> InlineKeyboardMarkup:
@@ -119,7 +140,7 @@ def _manager_filter_cancel_keyboard() -> InlineKeyboardMarkup:
 async def _fetch_manager_requests_page(
     session,
     page: int,
-    filter_payload: dict[str, str] | None = None,
+    filter_payload: dict[str, Any] | None = None,
 ) -> tuple[list[Request], int, int, int]:
     conditions = _manager_filter_conditions(filter_payload)
     total = await session.scalar(select(func.count()).select_from(Request).where(*conditions))
@@ -154,7 +175,7 @@ async def _show_manager_requests_list(
     page: int,
     *,
     context: str = "all",
-    filter_payload: dict[str, str] | None = None,
+    filter_payload: dict[str, Any] | None = None,
     edit: bool = False,
 ) -> None:
     requests, page, total_pages, total = await _fetch_manager_requests_page(
@@ -219,7 +240,7 @@ async def _show_manager_requests_list(
         label = _manager_filter_label(filter_payload)
         header = "Результаты фильтрации. Выберите заявку:"
         if label:
-            header = f"{header}\nФильтр: {html.escape(label)}"
+            header = f"{header}\n\n<b>Фильтр:</b>\n{html.escape(label)}"
     else:
         header = "📋 <b>Все заявки</b>\n\nВыберите заявку, чтобы посмотреть подробности и закрыть её."
     footer = f"\n\nСтраница {page + 1}/{total_pages} · Всего: {total}"

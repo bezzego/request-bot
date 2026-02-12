@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import html
 import logging
 from collections.abc import Sequence
 from datetime import date, datetime, time
+from typing import Any
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -47,6 +49,13 @@ from app.utils.pagination import clamp_page, total_pages_for
 from app.utils.request_filters import format_date_range_label, parse_date_range, quick_date_range
 from app.utils.request_formatters import format_hours_minutes, format_request_label, STATUS_TITLES
 from app.utils.timezone import combine_moscow, format_moscow, now_moscow
+from app.utils.advanced_filters import (
+    build_filter_conditions,
+    format_filter_label,
+    get_available_objects,
+    DateFilterMode,
+)
+from typing import Any
 
 router = Router()
 ENGINEER_CALENDAR_PREFIX = "eng_schedule"
@@ -83,45 +92,59 @@ class EngineerFilterStates(StatesGroup):
     value = State()
 
 
-def _engineer_filter_conditions(filter_payload: dict[str, str] | None) -> list:
+def _engineer_filter_conditions(filter_payload: dict[str, Any] | None) -> list:
+    """Строит условия фильтрации для заявок инженера."""
     if not filter_payload:
         return []
-    mode = (filter_payload.get("mode") or "").strip().lower()
-    value = (filter_payload.get("value") or "").strip()
-    conditions: list = []
-    if mode == "адрес" and value:
-        conditions.append(func.lower(Request.address).like(f"%{value.lower()}%"))
-    elif mode == "дата":
-        start = filter_payload.get("start")
-        end = filter_payload.get("end")
-        if start and end:
-            try:
-                start_dt = datetime.fromisoformat(start)
-                end_dt = datetime.fromisoformat(end)
-                conditions.append(Request.created_at.between(start_dt, end_dt))
-            except ValueError:
-                pass
-    return conditions
+    
+    # Поддержка старого формата фильтра для обратной совместимости
+    if "mode" in filter_payload:
+        mode = (filter_payload.get("mode") or "").strip().lower()
+        value = (filter_payload.get("value") or "").strip()
+        conditions: list = []
+        if mode == "адрес" and value:
+            conditions.append(func.lower(Request.address).like(f"%{value.lower()}%"))
+        elif mode == "дата":
+            start = filter_payload.get("start")
+            end = filter_payload.get("end")
+            if start and end:
+                try:
+                    start_dt = datetime.fromisoformat(start)
+                    end_dt = datetime.fromisoformat(end)
+                    conditions.append(Request.created_at.between(start_dt, end_dt))
+                except ValueError:
+                    pass
+        return conditions
+    
+    # Новый формат фильтра
+    return build_filter_conditions(filter_payload)
 
 
-def _engineer_filter_label(filter_payload: dict[str, str] | None) -> str:
+def _engineer_filter_label(filter_payload: dict[str, Any] | None) -> str:
+    """Форматирует описание фильтра для отображения."""
     if not filter_payload:
         return ""
-    mode = (filter_payload.get("mode") or "").strip().lower()
-    if mode == "адрес":
-        value = (filter_payload.get("value") or "").strip()
-        return f"адрес: {value}" if value else ""
-    if mode == "дата":
-        start = filter_payload.get("start")
-        end = filter_payload.get("end")
-        if start and end:
-            try:
-                start_dt = datetime.fromisoformat(start)
-                end_dt = datetime.fromisoformat(end)
-                return f"дата: {format_date_range_label(start_dt, end_dt)}"
-            except ValueError:
-                return ""
-    return ""
+    
+    # Поддержка старого формата фильтра для обратной совместимости
+    if "mode" in filter_payload:
+        mode = (filter_payload.get("mode") or "").strip().lower()
+        if mode == "адрес":
+            value = (filter_payload.get("value") or "").strip()
+            return f"адрес: {value}" if value else ""
+        if mode == "дата":
+            start = filter_payload.get("start")
+            end = filter_payload.get("end")
+            if start and end:
+                try:
+                    start_dt = datetime.fromisoformat(start)
+                    end_dt = datetime.fromisoformat(end)
+                    return f"дата: {format_date_range_label(start_dt, end_dt)}"
+                except ValueError:
+                    return ""
+        return ""
+    
+    # Новый формат фильтра
+    return format_filter_label(filter_payload)
 
 
 def _engineer_filter_menu_keyboard() -> InlineKeyboardMarkup:
@@ -150,10 +173,12 @@ async def _fetch_engineer_requests_page(
     session,
     engineer_id: int,
     page: int,
-    filter_payload: dict[str, str] | None = None,
+    filter_payload: dict[str, Any] | None = None,
 ) -> tuple[list[Request], int, int, int]:
-    conditions = [Request.engineer_id == engineer_id, *_engineer_filter_conditions(filter_payload)]
-    total = await session.scalar(select(func.count()).select_from(Request).where(*conditions))
+    base_conditions = [Request.engineer_id == engineer_id]
+    conditions = _engineer_filter_conditions(filter_payload)
+    all_conditions = base_conditions + conditions
+    total = await session.scalar(select(func.count()).select_from(Request).where(*all_conditions))
     total = int(total or 0)
     total_pages = total_pages_for(total, REQUESTS_PAGE_SIZE)
     page = clamp_page(page, total_pages)
@@ -167,7 +192,7 @@ async def _fetch_engineer_requests_page(
                     selectinload(Request.work_items),
                     selectinload(Request.master),
                 )
-                .where(*conditions)
+                .where(*all_conditions)
                 .order_by(Request.created_at.desc())
                 .limit(REQUESTS_PAGE_SIZE)
                 .offset(page * REQUESTS_PAGE_SIZE)
@@ -186,7 +211,7 @@ async def _show_engineer_requests_list(
     page: int,
     *,
     context: str = "list",
-    filter_payload: dict[str, str] | None = None,
+    filter_payload: dict[str, Any] | None = None,
     edit: bool = False,
 ) -> None:
     requests, page, total_pages, total = await _fetch_engineer_requests_page(
@@ -248,7 +273,7 @@ async def _show_engineer_requests_list(
         label = _engineer_filter_label(filter_payload)
         header = "Результаты фильтрации. Выберите заявку:"
         if label:
-            header = f"{header}\nФильтр: {label}"
+            header = f"{header}\n\n<b>Фильтр:</b>\n{html.escape(label)}"
     else:
         header = "Выберите заявку, чтобы управлять этапами и бюджетом."
     footer = f"\n\nСтраница {page + 1}/{total_pages} · Всего: {total}"
