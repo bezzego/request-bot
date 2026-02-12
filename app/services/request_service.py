@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -77,19 +78,6 @@ class RequestService:
     @staticmethod
     async def create_request(session: AsyncSession, data: RequestCreateData) -> Request:
         """Создаёт заявку от специалиста, назначает инженера и план осмотра."""
-        request_number = await generate_request_number(session)
-        object_ref = await RequestService._get_or_create_object(session, data.object_name, data.address)
-        contract_ref = None
-        if data.contract_number:
-            contract_ref = await RequestService._get_or_create_contract(
-                session,
-                data.contract_number,
-                data.contract_description,
-            )
-        defect_ref = None
-        if data.defect_type_name:
-            defect_ref = await RequestService._get_or_create_defect_type(session, data.defect_type_name)
-
         inspection_dt = to_moscow(data.inspection_datetime)
         if data.due_at is not None:
             due_at = to_moscow(data.due_at)
@@ -100,29 +88,68 @@ class RequestService:
             due_at = None
             remedy_term_days = data.remedy_term_days
 
-        request = Request(
-            number=request_number,
-            title=data.title,
-            description=data.description,
-            object=object_ref,
-            contract=contract_ref,
-            defect_type=defect_ref,
-            address=data.address,
-            apartment=data.apartment,
-            contact_person=data.contact_person,
-            contact_phone=data.contact_phone,
-            inspection_scheduled_at=inspection_dt,
-            inspection_location=data.inspection_location,
-            due_at=due_at,
-            remedy_term_days=remedy_term_days,
-            specialist_id=data.specialist_id,
-            engineer_id=data.engineer_id,
-            customer_id=data.customer_id,
-            status=RequestStatus.INSPECTION_SCHEDULED if inspection_dt else RequestStatus.NEW,
-        )
+        # Пытаемся создать заявку с уникальным номером
+        max_attempts = 5
+        request = None
+        for attempt in range(max_attempts):
+            # Пересоздаём зависимые объекты при каждой попытке (на случай rollback)
+            object_ref = await RequestService._get_or_create_object(session, data.object_name, data.address)
+            contract_ref = None
+            if data.contract_number:
+                contract_ref = await RequestService._get_or_create_contract(
+                    session,
+                    data.contract_number,
+                    data.contract_description,
+                )
+            defect_ref = None
+            if data.defect_type_name:
+                defect_ref = await RequestService._get_or_create_defect_type(session, data.defect_type_name)
 
-        session.add(request)
-        await session.flush()
+            request_number = await generate_request_number(session)
+            request = Request(
+                number=request_number,
+                title=data.title,
+                description=data.description,
+                object=object_ref,
+                contract=contract_ref,
+                defect_type=defect_ref,
+                address=data.address,
+                apartment=data.apartment,
+                contact_person=data.contact_person,
+                contact_phone=data.contact_phone,
+                inspection_scheduled_at=inspection_dt,
+                inspection_location=data.inspection_location,
+                due_at=due_at,
+                remedy_term_days=remedy_term_days,
+                specialist_id=data.specialist_id,
+                engineer_id=data.engineer_id,
+                customer_id=data.customer_id,
+                status=RequestStatus.INSPECTION_SCHEDULED if inspection_dt else RequestStatus.NEW,
+            )
+
+            session.add(request)
+            try:
+                await session.flush()
+                break  # Успешно создано
+            except IntegrityError as e:
+                await session.rollback()
+                # Проверяем, что это ошибка уникальности номера
+                error_str = str(e.orig) if hasattr(e, 'orig') else str(e)
+                if "ix_requests_number" in error_str or "duplicate key" in error_str.lower():
+                    if attempt < max_attempts - 1:
+                        # Пробуем снова с новым номером
+                        request = None
+                        continue
+                    else:
+                        raise RuntimeError(
+                            f"Не удалось создать уникальный номер заявки после {max_attempts} попыток"
+                        ) from e
+                else:
+                    # Другая ошибка целостности, пробрасываем дальше
+                    raise
+        
+        if request is None:
+            raise RuntimeError("Не удалось создать заявку")
 
         await RequestService._register_stage(
             session=session,
