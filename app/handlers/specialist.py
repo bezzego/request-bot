@@ -96,8 +96,35 @@ async def _get_defect_types_page(
     return items, page, total_pages
 
 
+OBJECTS_PAGE_SIZE = 12
+
+
+async def _get_objects_page(
+    session, page: int = 0, page_size: int = OBJECTS_PAGE_SIZE
+) -> tuple[list[Object], int, int]:
+    """Возвращает (список объектов для страницы, текущая страница, всего страниц)."""
+    total = await session.scalar(select(func.count()).select_from(Object))
+    total = int(total or 0)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = max(0, min(page, total_pages - 1))
+    offset = page * page_size
+    items = (
+        (
+            await session.execute(
+                select(Object)
+                .order_by(Object.name.asc())
+                .limit(page_size)
+                .offset(offset)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return items, page, total_pages
+
+
 async def _get_saved_objects(session, limit: int = 10) -> list[Object]:
-    """Получает список ранее использованных объектов (ЖК)."""
+    """Получает список ранее использованных объектов (ЖК). Оставлено для обратной совместимости."""
     return (
         (
             await session.execute(
@@ -145,8 +172,56 @@ async def _get_saved_addresses(session, object_name: str | None = None, limit: i
     return []
 
 
+ADDRESSES_PAGE_SIZE = 12
+
+
+async def _get_addresses_page(
+    session, object_name: str | None = None, page: int = 0, page_size: int = ADDRESSES_PAGE_SIZE
+) -> tuple[list[str], int, int]:
+    """Возвращает (список адресов для страницы, текущая страница, всего страниц)."""
+    # Строим базовые условия для запроса
+    if object_name:
+        name_normalized = object_name.strip().lower()
+        if name_normalized:
+            base_query = (
+                select(Request.address)
+                .join(Object, Request.object_id == Object.id)
+                .where(
+                    Request.address.isnot(None),
+                    func.lower(Object.name) == name_normalized,
+                )
+            )
+        else:
+            object_name = None
+    
+    if not object_name:
+        base_query = select(Request.address).where(Request.address.isnot(None))
+    
+    # Подсчитываем общее количество уникальных адресов
+    count_subquery = (
+        base_query.group_by(Request.address).subquery()
+    )
+    total = await session.scalar(select(func.count()).select_from(count_subquery))
+    total = int(total or 0)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = max(0, min(page, total_pages - 1))
+    offset = page * page_size
+    
+    # Получаем адреса для текущей страницы
+    query = (
+        base_query
+        .group_by(Request.address)
+        .order_by(func.max(Request.created_at).desc())
+        .limit(page_size)
+        .offset(offset)
+    )
+    result = await session.execute(query)
+    addresses = [row[0] for row in result.all() if row[0]]
+    return addresses, page, total_pages
+
+
 async def _get_addresses_for_keyboard(session, object_name: str | None, limit: int = 15) -> list[str]:
-    """Адреса для кнопок: сначала по текущему объекту, затем недавние по всем объектам (в т.ч. введённые вручную)."""
+    """Адреса для кнопок: сначала по текущему объекту, затем недавние по всем объектам (в т.ч. введённые вручную). Оставлено для обратной совместимости."""
     seen = set()
     result: list[str] = []
     name = (object_name or "").strip() or None
@@ -165,6 +240,97 @@ async def _get_addresses_for_keyboard(session, object_name: str | None, limit: i
     return result
 
 
+def _object_keyboard(
+    objects: list[Object],
+    page: int = 0,
+    total_pages: int = 1,
+) -> InlineKeyboardMarkup:
+    """Клавиатура выбора объекта (ЖК) с пагинацией."""
+    builder = InlineKeyboardBuilder()
+    for obj in objects:
+        name = obj.name[:40] + "…" if len(obj.name) > 40 else obj.name
+        builder.button(
+            text=name,
+            callback_data=f"spec:object:{obj.id}",
+        )
+    builder.button(text="✍️ Ввести вручную", callback_data="spec:object:manual")
+    
+    # Навигация пагинации в одну строку
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"spec:object:p:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="spec:object:noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"spec:object:p:{page + 1}"))
+        builder.row(*nav)
+    
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def _address_keyboard(
+    addresses: list[str],
+    page: int = 0,
+    total_pages: int = 1,
+    prefix: str = "spec:address",
+) -> InlineKeyboardMarkup:
+    """Клавиатура выбора адреса с пагинацией."""
+    builder = InlineKeyboardBuilder()
+    for idx, addr in enumerate(addresses):
+        addr_text = addr[:50] + "…" if len(addr) > 50 else addr
+        builder.button(
+            text=addr_text,
+            callback_data=f"{prefix}_idx:{idx}",
+        )
+    builder.button(text="✍️ Ввести вручную", callback_data=f"{prefix}:manual")
+    
+    # Навигация пагинации в одну строку
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"{prefix}:p:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data=f"{prefix}:noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"{prefix}:p:{page + 1}"))
+        builder.row(*nav)
+    
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def _contract_keyboard(
+    contracts: list[Contract],
+    page: int = 0,
+    total_pages: int = 1,
+) -> InlineKeyboardMarkup:
+    """Клавиатура выбора договора с пагинацией."""
+    builder = InlineKeyboardBuilder()
+    for contract in contracts:
+        contract_text = contract.number or f"Договор {contract.id}"
+        if contract.description:
+            contract_text = f"{contract.number} — {contract.description[:30]}"
+        contract_text = contract_text[:40] + "…" if len(contract_text) > 40 else contract_text
+        builder.button(
+            text=contract_text,
+            callback_data=f"spec:contract:{contract.id}",
+        )
+    builder.button(text="✍️ Ввести вручную", callback_data="spec:contract:manual")
+    
+    # Навигация пагинации в одну строку
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"spec:contract:p:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="spec:contract:noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"spec:contract:p:{page + 1}"))
+        builder.row(*nav)
+    
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 def _defect_type_keyboard(
     defect_types: list[DefectType],
     page: int = 0,
@@ -179,6 +345,8 @@ def _defect_type_keyboard(
             callback_data=f"spec:defect:{defect.id}",
         )
     builder.button(text="✍️ Ввести вручную", callback_data="spec:defect:manual")
+    
+    # Навигация пагинации в одну строку
     if total_pages > 1:
         nav = []
         if page > 0:
@@ -186,8 +354,9 @@ def _defect_type_keyboard(
         nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="spec:defect:noop"))
         if page < total_pages - 1:
             nav.append(InlineKeyboardButton(text="➡️", callback_data=f"spec:defect:p:{page + 1}"))
-        builder.row(*nav)
-    builder.adjust(2)
+        builder.row(*nav)  # Навигация в одну строку
+    
+    builder.adjust(1)  # Кнопки дефектов в один столбец
     return builder.as_markup()
 
 
@@ -199,8 +368,35 @@ async def _prompt_inspection_calendar(message: Message):
     )
 
 
+CONTRACTS_PAGE_SIZE = 12
+
+
+async def _get_contracts_page(
+    session, page: int = 0, page_size: int = CONTRACTS_PAGE_SIZE
+) -> tuple[list[Contract], int, int]:
+    """Возвращает (список договоров для страницы, текущая страница, всего страниц)."""
+    total = await session.scalar(select(func.count()).select_from(Contract))
+    total = int(total or 0)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = max(0, min(page, total_pages - 1))
+    offset = page * page_size
+    items = (
+        (
+            await session.execute(
+                select(Contract)
+                .order_by(Contract.number.asc())
+                .limit(page_size)
+                .offset(offset)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return items, page, total_pages
+
+
 async def _get_saved_contracts(session, limit: int = 10) -> list[Contract]:
-    """Возвращает последние использованные договоры."""
+    """Возвращает последние использованные договоры. Оставлено для обратной совместимости."""
     return (
         (
             await session.execute(
@@ -1980,30 +2176,52 @@ async def handle_title(message: Message, state: FSMContext):
 async def handle_description(message: Message, state: FSMContext):
     await state.update_data(description=message.text.strip())
     
-    # Показываем сохранённые ЖК
+    # Показываем сохранённые ЖК с пагинацией
     async with async_session() as session:
-        saved_objects = await _get_saved_objects(session, limit=10)
+        objects, page, total_pages = await _get_objects_page(session, page=0)
     
-    if saved_objects:
-        builder = InlineKeyboardBuilder()
-        for obj in saved_objects:
-            builder.button(
-                text=obj.name,
-                callback_data=f"spec:object:{obj.id}",
-            )
-        builder.button(text="✍️ Ввести вручную", callback_data="spec:object:manual")
-        builder.adjust(1)
+    await state.set_state(NewRequestStates.object_name)
+    await state.update_data(object_page=0)
+    
+    if objects:
         await message.answer(
             "Выберите ЖК из списка или введите вручную:",
-            reply_markup=builder.as_markup(),
+            reply_markup=_object_keyboard(objects, page=page, total_pages=total_pages),
         )
     else:
-        await state.set_state(NewRequestStates.object_name)
         await message.answer("Укажите объект (например, ЖК «Север», корпус 3).")
 
 
-@router.callback_query(StateFilter(NewRequestStates.description), F.data.startswith("spec:object"))
-async def handle_object_choice(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(StateFilter(NewRequestStates.object_name), F.data == "spec:object:noop")
+async def handle_object_noop(callback: CallbackQuery):
+    await callback.answer()
+    return
+
+
+@router.callback_query(StateFilter(NewRequestStates.object_name), F.data.startswith("spec:object:p:"))
+async def handle_object_page(callback: CallbackQuery, state: FSMContext):
+    """Переключение страницы списка объектов."""
+    try:
+        page = int(callback.data.split(":")[3])
+    except (IndexError, ValueError):
+        await callback.answer()
+        return
+
+    async with async_session() as session:
+        objects, cur_page, total_pages = await _get_objects_page(session, page=page)
+
+    await state.update_data(object_page=cur_page)
+
+    if objects:
+        await callback.message.edit_reply_markup(
+            reply_markup=_object_keyboard(objects, page=cur_page, total_pages=total_pages),
+        )
+    await callback.answer()
+    return
+
+
+async def _handle_object_selection(callback: CallbackQuery, state: FSMContext):
+    """Общая логика выбора объекта."""
     if callback.data == "spec:object:manual":
         await state.set_state(NewRequestStates.object_name)
         await callback.message.edit_reply_markup()
@@ -2021,23 +2239,15 @@ async def handle_object_choice(callback: CallbackQuery, state: FSMContext):
                     await state.update_data(object_name=object_name)
                     await callback.message.edit_text(f"ЖК: {object_name}")
                     
-                    # Кнопки: адреса по этому объекту + недавние (в т.ч. введённые вручную)
-                    saved_addresses = await _get_addresses_for_keyboard(session, object_name=object_name)
+                    # Показываем адреса с пагинацией
+                    addresses, addr_page, addr_total_pages = await _get_addresses_page(session, object_name=object_name, page=0)
                     
-                    if saved_addresses:
-                        await state.update_data(saved_addresses=saved_addresses)
+                    if addresses:
+                        await state.update_data(saved_addresses=addresses, address_page=0)
                         await state.set_state(NewRequestStates.object_name)  # Остаёмся в этом состоянии для обработки адреса
-                        builder = InlineKeyboardBuilder()
-                        for idx, addr in enumerate(saved_addresses):
-                            builder.button(
-                                text=addr[:50],
-                                callback_data=f"spec:address_idx:{idx}",
-                            )
-                        builder.button(text="✍️ Ввести вручную", callback_data="spec:address:manual")
-                        builder.adjust(1)
                         await callback.message.answer(
                             "Выберите адрес из списка или введите вручную:",
-                            reply_markup=builder.as_markup(),
+                            reply_markup=_address_keyboard(addresses, page=addr_page, total_pages=addr_total_pages),
                         )
                     else:
                         await state.set_state(NewRequestStates.address)
@@ -2050,33 +2260,78 @@ async def handle_object_choice(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Ошибка выбора ЖК. Попробуйте снова.", show_alert=True)
 
 
+@router.callback_query(StateFilter(NewRequestStates.description), F.data.startswith("spec:object"))
+async def handle_object_choice(callback: CallbackQuery, state: FSMContext):
+    await _handle_object_selection(callback, state)
+
+
+@router.callback_query(StateFilter(NewRequestStates.object_name), F.data.startswith("spec:object"))
+async def handle_object_choice_from_object_state(callback: CallbackQuery, state: FSMContext):
+    """Обработчик выбора объекта в состоянии object_name (для пагинации)."""
+    await _handle_object_selection(callback, state)
+
+
 @router.message(StateFilter(NewRequestStates.object_name))
 async def handle_object(message: Message, state: FSMContext):
     object_name = message.text.strip()
-    await state.update_data(object_name=object_name)
+    if not object_name:
+        await message.answer("Название объекта не может быть пустым.")
+        return
     
-    # Кнопки: адреса по этому объекту + недавние (в т.ч. введённые вручную)
+    # Сохраняем вручную введённый объект в справочник
     async with async_session() as session:
-        saved_addresses = await _get_addresses_for_keyboard(session, object_name=object_name)
+        try:
+            await RequestService._get_or_create_object(session, object_name, None)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+        # В любом случае продолжаем — объект попадёт в заявку при создании
+        
+        # Показываем адреса с пагинацией
+        addresses, addr_page, addr_total_pages = await _get_addresses_page(session, object_name=object_name, page=0)
     
-    if saved_addresses:
-        # Сохраняем адреса в state для использования в callback
-        await state.update_data(saved_addresses=saved_addresses)
-        builder = InlineKeyboardBuilder()
-        for idx, addr in enumerate(saved_addresses):
-            builder.button(
-                text=addr[:50],  # Ограничиваем длину текста кнопки
-                callback_data=f"spec:address_idx:{idx}",
-            )
-        builder.button(text="✍️ Ввести вручную", callback_data="spec:address:manual")
-        builder.adjust(1)
+    await state.update_data(object_name=object_name, saved_addresses=addresses, address_page=0)
+    
+    if addresses:
         await message.answer(
+            f"Объект «{object_name}» сохранён в справочник.\n\n"
             "Выберите адрес из списка или введите вручную:",
-            reply_markup=builder.as_markup(),
+            reply_markup=_address_keyboard(addresses, page=addr_page, total_pages=addr_total_pages),
         )
     else:
         await state.set_state(NewRequestStates.address)
-        await message.answer("Укажите адрес объекта.")
+        await message.answer(f"Объект «{object_name}» сохранён в справочник.\n\nУкажите адрес объекта.")
+
+
+@router.callback_query(StateFilter(NewRequestStates.object_name), F.data == "spec:address:noop")
+async def handle_address_noop(callback: CallbackQuery):
+    await callback.answer()
+    return
+
+
+@router.callback_query(StateFilter(NewRequestStates.object_name), F.data.startswith("spec:address:p:"))
+async def handle_address_page(callback: CallbackQuery, state: FSMContext):
+    """Переключение страницы списка адресов."""
+    try:
+        page = int(callback.data.split(":")[3])
+    except (IndexError, ValueError):
+        await callback.answer()
+        return
+
+    data = await state.get_data()
+    object_name = data.get("object_name")
+
+    async with async_session() as session:
+        addresses, cur_page, total_pages = await _get_addresses_page(session, object_name=object_name, page=page)
+
+    await state.update_data(saved_addresses=addresses, address_page=cur_page)
+
+    if addresses:
+        await callback.message.edit_reply_markup(
+            reply_markup=_address_keyboard(addresses, page=cur_page, total_pages=total_pages),
+        )
+    await callback.answer()
+    return
 
 
 @router.callback_query(StateFilter(NewRequestStates.object_name), F.data.startswith("spec:address"))
@@ -2137,31 +2392,49 @@ async def handle_contact_phone(message: Message, state: FSMContext):
         return
     await state.update_data(contact_phone=phone)
 
-    # Показываем сохранённые договоры
+    # Показываем сохранённые договоры с пагинацией
     async with async_session() as session:
-        contracts = await _get_saved_contracts(session, limit=10)
+        contracts, page, total_pages = await _get_contracts_page(session, page=0)
+
+    await state.set_state(NewRequestStates.contract_number)
+    await state.update_data(contract_page=0)
 
     if contracts:
-        builder = InlineKeyboardBuilder()
-        for contract in contracts:
-            title = contract.number
-            if contract.description:
-                title = f"{contract.number} — {contract.description[:30]}"
-            builder.button(
-                text=title[:50],
-                callback_data=f"spec:contract:{contract.id}",
-            )
-        builder.button(text="✍️ Ввести вручную", callback_data="spec:contract:manual")
-        builder.adjust(1)
-        await state.set_state(NewRequestStates.contract_number)
         await message.answer(
             "Выберите номер договора из списка или введите вручную.\n"
             "Если договора нет — отправьте «-».",
-            reply_markup=builder.as_markup(),
+            reply_markup=_contract_keyboard(contracts, page=page, total_pages=total_pages),
         )
     else:
-        await state.set_state(NewRequestStates.contract_number)
         await message.answer("Номер договора (если нет — отправьте «-»).")
+
+
+@router.callback_query(StateFilter(NewRequestStates.contract_number), F.data == "spec:contract:noop")
+async def handle_contract_noop(callback: CallbackQuery):
+    await callback.answer()
+    return
+
+
+@router.callback_query(StateFilter(NewRequestStates.contract_number), F.data.startswith("spec:contract:p:"))
+async def handle_contract_page(callback: CallbackQuery, state: FSMContext):
+    """Переключение страницы списка договоров."""
+    try:
+        page = int(callback.data.split(":")[3])
+    except (IndexError, ValueError):
+        await callback.answer()
+        return
+
+    async with async_session() as session:
+        contracts, cur_page, total_pages = await _get_contracts_page(session, page=page)
+
+    await state.update_data(contract_page=cur_page)
+
+    if contracts:
+        await callback.message.edit_reply_markup(
+            reply_markup=_contract_keyboard(contracts, page=cur_page, total_pages=total_pages),
+        )
+    await callback.answer()
+    return
 
 
 @router.callback_query(StateFilter(NewRequestStates.contract_number), F.data.startswith("spec:contract:"))
@@ -2207,7 +2480,19 @@ async def handle_contract_choice(callback: CallbackQuery, state: FSMContext):
 @router.message(StateFilter(NewRequestStates.contract_number))
 async def handle_contract(message: Message, state: FSMContext):
     contract = (message.text or "").strip()
-    await state.update_data(contract_number=None if contract == "-" else contract or None)
+    contract_number = None if contract == "-" else contract or None
+    
+    # Сохраняем вручную введённый договор в справочник
+    if contract_number:
+        async with async_session() as session:
+            try:
+                await RequestService._get_or_create_contract(session, contract_number, None)
+                await session.commit()
+            except Exception:
+                await session.rollback()
+            # В любом случае продолжаем — договор попадёт в заявку при создании
+    
+    await state.update_data(contract_number=contract_number)
 
     async with async_session() as session:
         defect_types, page, total_pages = await _get_defect_types_page(session, page=0)
