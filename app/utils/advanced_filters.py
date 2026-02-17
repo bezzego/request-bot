@@ -81,57 +81,68 @@ def build_filter_conditions(
     if statuses and isinstance(statuses, list) and len(statuses) > 0:
         status_enums = []
         for status_name in statuses:
-            if status_name in STATUS_MAPPING:
+            if not status_name:  # Пропускаем пустые значения
+                continue
+            if isinstance(status_name, str) and status_name in STATUS_MAPPING:
                 status_enums.append(STATUS_MAPPING[status_name])
-            elif status_name in RequestStatus:
-                status_enums.append(RequestStatus(status_name))
+            elif isinstance(status_name, (str, RequestStatus)):
+                try:
+                    if isinstance(status_name, str):
+                        status_enums.append(RequestStatus(status_name))
+                    else:
+                        status_enums.append(status_name)
+                except (ValueError, TypeError):
+                    pass
         if status_enums:
             conditions.append(Request.status.in_(status_enums))
     
     # Фильтр по объекту
     object_id = filter_data.get("object_id")
-    if object_id:
+    if object_id is not None and object_id != "":
         try:
             object_id_int = int(object_id)
-            conditions.append(Request.object_id == object_id_int)
+            if object_id_int > 0:
+                conditions.append(Request.object_id == object_id_int)
         except (ValueError, TypeError):
             pass
     
     # Фильтр по адресу
     address = filter_data.get("address")
-    if address:
+    if address and str(address).strip():
         address_str = str(address).strip()
         if address_str:
             conditions.append(func.lower(Request.address).like(f"%{address_str.lower()}%"))
     
     # Фильтр по контактному лицу
     contact_person = filter_data.get("contact_person")
-    if contact_person:
+    if contact_person and str(contact_person).strip():
         contact_str = str(contact_person).strip()
         if contact_str:
             conditions.append(func.lower(Request.contact_person).like(f"%{contact_str.lower()}%"))
     
     # Фильтр по инженеру
     engineer_id = filter_data.get("engineer_id")
-    if engineer_id:
+    if engineer_id is not None and engineer_id != "":
         try:
             engineer_id_int = int(engineer_id)
-            conditions.append(Request.engineer_id == engineer_id_int)
+            if engineer_id_int > 0:
+                conditions.append(Request.engineer_id == engineer_id_int)
         except (ValueError, TypeError):
             pass
     
     # Фильтр по мастеру
     master_id = filter_data.get("master_id")
-    if master_id:
+    if master_id is not None and master_id != "":
         try:
             master_id_int = int(master_id)
-            conditions.append(Request.master_id == master_id_int)
+            if master_id_int > 0:
+                conditions.append(Request.master_id == master_id_int)
         except (ValueError, TypeError):
             pass
     
     # Фильтр по номеру заявки
     request_number = filter_data.get("request_number")
-    if request_number:
+    if request_number and str(request_number).strip():
         number_str = str(request_number).strip().upper()
         if number_str:
             # Поддерживаем частичный поиск (например, "RQ-2026" найдет все заявки за 2026 год)
@@ -139,19 +150,21 @@ def build_filter_conditions(
     
     # Фильтр по договору
     contract_id = filter_data.get("contract_id")
-    if contract_id:
+    if contract_id is not None and contract_id != "":
         try:
             contract_id_int = int(contract_id)
-            conditions.append(Request.contract_id == contract_id_int)
+            if contract_id_int > 0:
+                conditions.append(Request.contract_id == contract_id_int)
         except (ValueError, TypeError):
             pass
     
     # Фильтр по типу дефекта
     defect_type_id = filter_data.get("defect_type_id")
-    if defect_type_id:
+    if defect_type_id is not None and defect_type_id != "":
         try:
             defect_type_id_int = int(defect_type_id)
-            conditions.append(Request.defect_type_id == defect_type_id_int)
+            if defect_type_id_int > 0:
+                conditions.append(Request.defect_type_id == defect_type_id_int)
         except (ValueError, TypeError):
             pass
     
@@ -165,11 +178,11 @@ def build_filter_conditions(
             date_start = None
             date_end = None
             
-            if date_start_str:
-                date_start = datetime.fromisoformat(date_start_str)
+            if date_start_str and str(date_start_str).strip():
+                date_start = datetime.fromisoformat(str(date_start_str).strip())
                 date_start = to_moscow(date_start)
-            if date_end_str:
-                date_end = datetime.fromisoformat(date_end_str)
+            if date_end_str and str(date_end_str).strip():
+                date_end = datetime.fromisoformat(str(date_end_str).strip())
                 date_end = to_moscow(date_end)
                 # Устанавливаем конец дня
                 if date_end:
@@ -191,7 +204,8 @@ def build_filter_conditions(
                 conditions.append(date_field >= date_start)
             elif date_end:
                 conditions.append(date_field <= date_end)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, AttributeError) as e:
+            # Логируем ошибку, но не прерываем выполнение
             pass
     
     return conditions

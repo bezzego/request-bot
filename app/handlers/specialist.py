@@ -470,6 +470,8 @@ async def specialist_requests_page(callback: CallbackQuery, state: FSMContext):
         page = int(callback.data.split(":")[2])
     except (ValueError, IndexError):
         page = 0
+    # Очищаем фильтр при переходе на обычный список
+    await state.update_data(spec_filter=None)
     async with async_session() as session:
         specialist = await _get_specialist(session, callback.from_user.id)
         if not specialist:
@@ -860,29 +862,74 @@ async def specialist_filter_date_input(message: Message, state: FSMContext):
     )
 
 
+def _clean_filter_payload(filter_payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Очищает фильтр от пустых значений и нормализует данные."""
+    if not filter_payload:
+        return None
+    
+    cleaned = {}
+    
+    # Статусы
+    statuses = filter_payload.get("statuses")
+    if statuses and isinstance(statuses, list):
+        cleaned_statuses = [s for s in statuses if s]
+        if cleaned_statuses:
+            cleaned["statuses"] = cleaned_statuses
+    
+    # ID поля - проверяем что это валидное число > 0
+    for key in ["object_id", "engineer_id", "master_id", "contract_id", "defect_type_id"]:
+        value = filter_payload.get(key)
+        if value is not None and value != "":
+            try:
+                int_value = int(value)
+                if int_value > 0:
+                    cleaned[key] = int_value
+            except (ValueError, TypeError):
+                pass
+    
+    # Строковые поля - проверяем что не пустые
+    for key in ["address", "contact_person", "request_number"]:
+        value = filter_payload.get(key)
+        if value and str(value).strip():
+            cleaned[key] = str(value).strip()
+    
+    # Даты
+    date_mode = filter_payload.get("date_mode")
+    date_start = filter_payload.get("date_start")
+    date_end = filter_payload.get("date_end")
+    
+    if date_start or date_end:
+        cleaned["date_mode"] = date_mode or DateFilterMode.CREATED
+        if date_start and str(date_start).strip():
+            cleaned["date_start"] = str(date_start).strip()
+        if date_end and str(date_end).strip():
+            cleaned["date_end"] = str(date_end).strip()
+    
+    # Дополнительные поля для отображения
+    for key in ["object_name", "engineer_name", "master_name", "contract_number", "defect_type_name"]:
+        value = filter_payload.get(key)
+        if value:
+            cleaned[key] = value
+    
+    return cleaned if cleaned else None
+
+
 @router.callback_query(F.data == "spec:flt:apply")
 async def specialist_filter_apply(callback: CallbackQuery, state: FSMContext):
     """Применение фильтра."""
     data = await state.get_data()
     filter_payload = data.get("spec_filter")
     
+    # Очищаем фильтр от пустых значений
+    cleaned_filter = _clean_filter_payload(filter_payload)
+    
     # Проверяем, что есть хотя бы один параметр фильтра
-    if not filter_payload or (
-        not filter_payload.get("statuses")
-        and not filter_payload.get("object_id")
-        and not filter_payload.get("address")
-        and not filter_payload.get("contact_person")
-        and not filter_payload.get("engineer_id")
-        and not filter_payload.get("master_id")
-        and not filter_payload.get("request_number")
-        and not filter_payload.get("contract_id")
-        and not filter_payload.get("defect_type_id")
-        and not filter_payload.get("date_start")
-        and not filter_payload.get("date_end")
-    ):
+    if not cleaned_filter:
         await callback.answer("Выберите хотя бы один параметр фильтрации.", show_alert=True)
         return
     
+    # Сохраняем очищенный фильтр обратно в state
+    await state.update_data(spec_filter=cleaned_filter)
     await state.set_state(None)
     
     async with async_session() as session:
@@ -891,16 +938,19 @@ async def specialist_filter_apply(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Нет доступа.", show_alert=True)
             return
         
-        await _show_specialist_requests_list(
-            callback.message,
-            session,
-            specialist.id,
-            page=0,
-            context="filter",
-            filter_payload=filter_payload,
-            edit=True,
-        )
-    await callback.answer("Фильтр применён.")
+        try:
+            await _show_specialist_requests_list(
+                callback.message,
+                session,
+                specialist.id,
+                page=0,
+                context="filter",
+                filter_payload=cleaned_filter,
+                edit=True,
+            )
+            await callback.answer("Фильтр применён.")
+        except Exception as e:
+            await callback.answer(f"Ошибка при применении фильтра: {str(e)}", show_alert=True)
 
 
 @router.callback_query(F.data == "spec:flt:address")
@@ -1695,11 +1745,9 @@ async def specialist_request_detail(callback: CallbackQuery, state: FSMContext):
     if context == "filter":
         data = await state.get_data()
         filter_payload = data.get("spec_filter")
-        if filter_payload:
-            # Фильтр уже сохранен, ничего не делаем
-            pass
-        else:
-            # Сохраняем пустой фильтр для контекста
+        if not filter_payload:
+            # Если фильтр был потерян, пытаемся восстановить из контекста
+            # Но лучше просто сохранить пустой словарь, чтобы контекст сохранился
             await state.update_data(spec_filter={})
     
     await callback.message.edit_text(detail_text, reply_markup=builder.as_markup())
@@ -1758,6 +1806,10 @@ async def specialist_delete_confirm(callback: CallbackQuery, state: FSMContext):
     return_to_list = len(parts) >= 5
     ctx_key = parts[3] if return_to_list else "list"
     page = int(parts[4]) if return_to_list else 0
+    
+    # Получаем фильтр из state для сохранения контекста
+    data = await state.get_data()
+    filter_payload = data.get("spec_filter") if ctx_key == "filter" else None
 
     async with async_session() as session:
         specialist = await _get_specialist(session, callback.from_user.id)
@@ -2089,15 +2141,26 @@ async def specialist_open_file(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("spec:back"))
-async def specialist_back_to_list(callback: CallbackQuery):
+async def specialist_back_to_list(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split(":")
     page = 0
+    context = "list"
+    
+    # Определяем контекст и страницу из callback_data
     if len(parts) >= 3:
         try:
             page = int(parts[2])
         except ValueError:
             page = 0
-
+    
+    # Получаем фильтр из state
+    data = await state.get_data()
+    filter_payload = data.get("spec_filter")
+    
+    # Определяем контекст по наличию фильтра
+    if filter_payload and any(filter_payload.values()):
+        context = "filter"
+    
     async with async_session() as session:
         specialist = await _get_specialist(session, callback.from_user.id)
         if not specialist:
@@ -2108,6 +2171,8 @@ async def specialist_back_to_list(callback: CallbackQuery):
             session,
             specialist.id,
             page=page,
+            context=context,
+            filter_payload=filter_payload,
             edit=True,
         )
     await callback.answer()
