@@ -1941,10 +1941,6 @@ async def specialist_view_photos(callback: CallbackQuery):
     from app.handlers.engineer import _send_all_photos
     await _send_all_photos(callback.message, photos)
     await callback.answer()
-    builder.adjust(1)
-
-    await callback.message.edit_text(detail_text, reply_markup=builder.as_markup())
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("spec:close_info:"))
