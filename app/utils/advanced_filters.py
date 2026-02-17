@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import selectinload
 
 from app.infrastructure.db.models import Object, Request, RequestStatus
@@ -111,7 +111,13 @@ def build_filter_conditions(
     if address and str(address).strip():
         address_str = str(address).strip()
         if address_str:
-            conditions.append(func.lower(Request.address).like(f"%{address_str.lower()}%"))
+            # Проверяем что адрес не NULL и содержит искомую строку
+            conditions.append(
+                and_(
+                    Request.address.isnot(None),
+                    func.lower(Request.address).like(f"%{address_str.lower()}%")
+                )
+            )
     
     # Фильтр по контактному лицу
     contact_person = filter_data.get("contact_person")

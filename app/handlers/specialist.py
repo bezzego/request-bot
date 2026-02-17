@@ -879,7 +879,14 @@ def _clean_filter_payload(filter_payload: dict[str, Any] | None) -> dict[str, An
     # ID поля - проверяем что это валидное число > 0
     for key in ["object_id", "engineer_id", "master_id", "contract_id", "defect_type_id"]:
         value = filter_payload.get(key)
-        if value is not None and value != "":
+        # Проверяем что значение существует и не пустое
+        if value is not None:
+            # Если это строка, проверяем что она не пустая
+            if isinstance(value, str) and not value.strip():
+                continue
+            # Если это число 0 или отрицательное, пропускаем
+            if isinstance(value, (int, float)) and value <= 0:
+                continue
             try:
                 int_value = int(value)
                 if int_value > 0:
@@ -920,12 +927,36 @@ async def specialist_filter_apply(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     filter_payload = data.get("spec_filter")
     
-    # Очищаем фильтр от пустых значений
+    # Проверяем, что есть хотя бы один параметр фильтра (до очистки)
+    if not filter_payload:
+        await callback.answer("Выберите хотя бы один параметр фильтрации.", show_alert=True)
+        return
+    
+    # Проверяем наличие хотя бы одного непустого параметра
+    has_filter = (
+        filter_payload.get("statuses")
+        or filter_payload.get("object_id")
+        or filter_payload.get("address")
+        or filter_payload.get("contact_person")
+        or filter_payload.get("engineer_id")
+        or filter_payload.get("master_id")
+        or filter_payload.get("request_number")
+        or filter_payload.get("contract_id")
+        or filter_payload.get("defect_type_id")
+        or filter_payload.get("date_start")
+        or filter_payload.get("date_end")
+    )
+    
+    if not has_filter:
+        await callback.answer("Выберите хотя бы один параметр фильтрации.", show_alert=True)
+        return
+    
+    # Очищаем фильтр от пустых значений, но сохраняем все валидные данные
     cleaned_filter = _clean_filter_payload(filter_payload)
     
-    # Проверяем, что есть хотя бы один параметр фильтра
+    # Если после очистки фильтр стал пустым, значит все значения были невалидными
     if not cleaned_filter:
-        await callback.answer("Выберите хотя бы один параметр фильтрации.", show_alert=True)
+        await callback.answer("Выберите хотя бы один валидный параметр фильтрации.", show_alert=True)
         return
     
     # Сохраняем очищенный фильтр обратно в state
