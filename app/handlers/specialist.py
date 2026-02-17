@@ -69,16 +69,31 @@ async def _get_specialist(session, telegram_id: int) -> User | None:
     return None
 
 
-async def _get_defect_types(session) -> list[DefectType]:
-    return (
+DEFECT_TYPES_PAGE_SIZE = 12
+
+
+async def _get_defect_types_page(
+    session, page: int = 0, page_size: int = DEFECT_TYPES_PAGE_SIZE
+) -> tuple[list[DefectType], int, int]:
+    """Возвращает (список типов дефектов для страницы, текущая страница, всего страниц)."""
+    total = await session.scalar(select(func.count()).select_from(DefectType))
+    total = int(total or 0)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = max(0, min(page, total_pages - 1))
+    offset = page * page_size
+    items = (
         (
             await session.execute(
-                select(DefectType).order_by(DefectType.name.asc()).limit(12)
+                select(DefectType)
+                .order_by(DefectType.name.asc())
+                .limit(page_size)
+                .offset(offset)
             )
         )
         .scalars()
         .all()
     )
+    return items, page, total_pages
 
 
 async def _get_saved_objects(session, limit: int = 10) -> list[Object]:
@@ -150,14 +165,28 @@ async def _get_addresses_for_keyboard(session, object_name: str | None, limit: i
     return result
 
 
-def _defect_type_keyboard(defect_types: list[DefectType]):
+def _defect_type_keyboard(
+    defect_types: list[DefectType],
+    page: int = 0,
+    total_pages: int = 1,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for defect in defect_types:
+        # Обрезаем длинные названия для кнопки (лимит Telegram ~64 байта на callback_data, текст кнопки можно длиннее)
+        name = defect.name[:40] + "…" if len(defect.name) > 40 else defect.name
         builder.button(
-            text=defect.name,
+            text=name,
             callback_data=f"spec:defect:{defect.id}",
         )
     builder.button(text="✍️ Ввести вручную", callback_data="spec:defect:manual")
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"spec:defect:p:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="spec:defect:noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"spec:defect:p:{page + 1}"))
+        builder.row(*nav)
     builder.adjust(2)
     return builder.as_markup()
 
@@ -2161,13 +2190,14 @@ async def handle_contract_choice(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(f"Договор: {contract.number}")
 
     async with async_session() as session:
-        defect_types = await _get_defect_types(session)
+        defect_types, page, total_pages = await _get_defect_types_page(session, page=0)
 
     await state.set_state(NewRequestStates.defect_type)
+    await state.update_data(defect_page=0)
     if defect_types:
         await callback.message.answer(
             "Выберите тип дефекта из списка или введите свой текстом.",
-            reply_markup=_defect_type_keyboard(defect_types),
+            reply_markup=_defect_type_keyboard(defect_types, page=page, total_pages=total_pages),
         )
     else:
         await callback.message.answer("Тип дефекта (например, «Трещины в стене»).")
@@ -2180,26 +2210,63 @@ async def handle_contract(message: Message, state: FSMContext):
     await state.update_data(contract_number=None if contract == "-" else contract or None)
 
     async with async_session() as session:
-        defect_types = await _get_defect_types(session)
+        defect_types, page, total_pages = await _get_defect_types_page(session, page=0)
 
     await state.set_state(NewRequestStates.defect_type)
+    await state.update_data(defect_page=0)
     if defect_types:
         await message.answer(
             "Выберите тип дефекта из списка или введите свой текстом.",
-            reply_markup=_defect_type_keyboard(defect_types),
+            reply_markup=_defect_type_keyboard(defect_types, page=page, total_pages=total_pages),
         )
     else:
         await message.answer("Тип дефекта (например, «Трещины в стене»).")
 
 
+@router.callback_query(StateFilter(NewRequestStates.defect_type), F.data == "spec:defect:noop")
+async def handle_defect_type_noop(callback: CallbackQuery):
+    await callback.answer()
+    return
+
+
+@router.callback_query(StateFilter(NewRequestStates.defect_type), F.data.startswith("spec:defect:p:"))
+async def handle_defect_type_page(callback: CallbackQuery, state: FSMContext):
+    """Переключение страницы списка типов дефектов."""
+    try:
+        page = int(callback.data.split(":")[3])
+    except (IndexError, ValueError):
+        await callback.answer()
+        return
+
+    async with async_session() as session:
+        defect_types, cur_page, total_pages = await _get_defect_types_page(session, page=page)
+
+    await state.update_data(defect_page=cur_page)
+
+    if defect_types:
+        await callback.message.edit_reply_markup(
+            reply_markup=_defect_type_keyboard(defect_types, page=cur_page, total_pages=total_pages),
+        )
+    await callback.answer()
+    return
+
+
 @router.callback_query(StateFilter(NewRequestStates.defect_type), F.data.startswith("spec:defect:"))
 async def handle_defect_type_choice(callback: CallbackQuery, state: FSMContext):
-    _, _, type_id = callback.data.split(":")
+    parts = callback.data.split(":")
+    type_id = parts[2] if len(parts) >= 3 else ""
     if type_id == "manual":
         await callback.answer("Введите тип дефекта сообщением.")
         return
+    if type_id == "noop" or type_id == "p":
+        return  # уже обработано выше
 
-    defect_type_id = int(type_id)
+    try:
+        defect_type_id = int(type_id)
+    except ValueError:
+        await callback.answer()
+        return
+
     async with async_session() as session:
         defect = await session.scalar(select(DefectType).where(DefectType.id == defect_type_id))
 
@@ -2217,8 +2284,28 @@ async def handle_defect_type_choice(callback: CallbackQuery, state: FSMContext):
 @router.message(StateFilter(NewRequestStates.defect_type))
 async def handle_defect_type(message: Message, state: FSMContext):
     defect = message.text.strip()
-    await state.update_data(defect_type=None if defect == "-" else defect)
+    if defect == "-":
+        await state.update_data(defect_type=None)
+        await state.set_state(NewRequestStates.inspection_datetime)
+        await _prompt_inspection_calendar(message)
+        return
+
+    if not defect:
+        await message.answer("Введите тип дефекта текстом или выберите из списка.")
+        return
+
+    # Сохраняем введённый вручную тип дефекта в справочник, чтобы он появлялся в списке в следующий раз
+    async with async_session() as session:
+        try:
+            await RequestService._get_or_create_defect_type(session, defect)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+        # В любом случае продолжаем — тип попадёт в заявку при создании
+
+    await state.update_data(defect_type=defect)
     await state.set_state(NewRequestStates.inspection_datetime)
+    await message.answer(f"Тип дефекта «{defect}» сохранён в справочник и будет в списке при следующих заявках.")
     await _prompt_inspection_calendar(message)
 
 
