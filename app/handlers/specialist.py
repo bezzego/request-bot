@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import html
+import logging
 from datetime import date, datetime, time
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
@@ -864,7 +867,9 @@ async def specialist_filter_date_input(message: Message, state: FSMContext):
 
 def _clean_filter_payload(filter_payload: dict[str, Any] | None) -> dict[str, Any] | None:
     """Очищает фильтр от пустых значений и нормализует данные."""
+    logger.info(f"[FILTER CLEAN] Input filter_payload: {filter_payload}")
     if not filter_payload:
+        logger.info("[FILTER CLEAN] filter_payload is None or empty, returning None")
         return None
     
     cleaned = {}
@@ -879,26 +884,37 @@ def _clean_filter_payload(filter_payload: dict[str, Any] | None) -> dict[str, An
     # ID поля - проверяем что это валидное число > 0
     for key in ["object_id", "engineer_id", "master_id", "contract_id", "defect_type_id"]:
         value = filter_payload.get(key)
+        logger.info(f"[FILTER CLEAN] Processing {key}: {value} (type: {type(value)})")
         # Проверяем что значение существует и не пустое
         if value is not None:
             # Если это строка, проверяем что она не пустая
             if isinstance(value, str) and not value.strip():
+                logger.info(f"[FILTER CLEAN] Skipping {key}: empty string")
                 continue
             # Если это число 0 или отрицательное, пропускаем
             if isinstance(value, (int, float)) and value <= 0:
+                logger.info(f"[FILTER CLEAN] Skipping {key}: <= 0")
                 continue
             try:
                 int_value = int(value)
                 if int_value > 0:
+                    logger.info(f"[FILTER CLEAN] Adding {key}: {int_value}")
                     cleaned[key] = int_value
-            except (ValueError, TypeError):
-                pass
+                else:
+                    logger.warning(f"[FILTER CLEAN] Skipping {key}: converted to {int_value} <= 0")
+            except (ValueError, TypeError) as e:
+                logger.warning(f"[FILTER CLEAN] Failed to convert {key} to int: {value}, error: {e}")
     
     # Строковые поля - проверяем что не пустые
     for key in ["address", "contact_person", "request_number"]:
         value = filter_payload.get(key)
+        logger.info(f"[FILTER CLEAN] Processing string field {key}: {value}")
         if value and str(value).strip():
-            cleaned[key] = str(value).strip()
+            cleaned_value = str(value).strip()
+            logger.info(f"[FILTER CLEAN] Adding {key}: '{cleaned_value}'")
+            cleaned[key] = cleaned_value
+        else:
+            logger.info(f"[FILTER CLEAN] Skipping {key}: empty or None")
     
     # Даты
     date_mode = filter_payload.get("date_mode")
@@ -916,19 +932,26 @@ def _clean_filter_payload(filter_payload: dict[str, Any] | None) -> dict[str, An
     for key in ["object_name", "engineer_name", "master_name", "contract_number", "defect_type_name"]:
         value = filter_payload.get(key)
         if value:
+            logger.info(f"[FILTER CLEAN] Adding display field {key}: {value}")
             cleaned[key] = value
     
-    return cleaned if cleaned else None
+    logger.info(f"[FILTER CLEAN] Final cleaned filter: {cleaned}")
+    result = cleaned if cleaned else None
+    logger.info(f"[FILTER CLEAN] Returning: {result}")
+    return result
 
 
 @router.callback_query(F.data == "spec:flt:apply")
 async def specialist_filter_apply(callback: CallbackQuery, state: FSMContext):
     """Применение фильтра."""
+    logger.info("[FILTER APPLY] Starting filter apply")
     data = await state.get_data()
     filter_payload = data.get("spec_filter")
+    logger.info(f"[FILTER APPLY] Raw filter_payload from state: {filter_payload}")
     
     # Проверяем, что есть хотя бы один параметр фильтра (до очистки)
     if not filter_payload:
+        logger.warning("[FILTER APPLY] No filter_payload in state")
         await callback.answer("Выберите хотя бы один параметр фильтрации.", show_alert=True)
         return
     
@@ -946,22 +969,27 @@ async def specialist_filter_apply(callback: CallbackQuery, state: FSMContext):
         or filter_payload.get("date_start")
         or filter_payload.get("date_end")
     )
+    logger.info(f"[FILTER APPLY] has_filter check: {has_filter}")
     
     if not has_filter:
+        logger.warning("[FILTER APPLY] No valid filter parameters found")
         await callback.answer("Выберите хотя бы один параметр фильтрации.", show_alert=True)
         return
     
     # Очищаем фильтр от пустых значений, но сохраняем все валидные данные
     cleaned_filter = _clean_filter_payload(filter_payload)
+    logger.info(f"[FILTER APPLY] Cleaned filter: {cleaned_filter}")
     
     # Если после очистки фильтр стал пустым, значит все значения были невалидными
     if not cleaned_filter:
+        logger.warning("[FILTER APPLY] Cleaned filter is empty")
         await callback.answer("Выберите хотя бы один валидный параметр фильтрации.", show_alert=True)
         return
     
     # Сохраняем очищенный фильтр обратно в state
     await state.update_data(spec_filter=cleaned_filter)
     await state.set_state(None)
+    logger.info("[FILTER APPLY] Filter saved to state")
     
     async with async_session() as session:
         specialist = await _get_specialist(session, callback.from_user.id)
@@ -969,6 +997,7 @@ async def specialist_filter_apply(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Нет доступа.", show_alert=True)
             return
         
+        logger.info(f"[FILTER APPLY] Applying filter for specialist_id: {specialist.id}")
         try:
             await _show_specialist_requests_list(
                 callback.message,
@@ -979,8 +1008,10 @@ async def specialist_filter_apply(callback: CallbackQuery, state: FSMContext):
                 filter_payload=cleaned_filter,
                 edit=True,
             )
+            logger.info("[FILTER APPLY] Filter applied successfully")
             await callback.answer("Фильтр применён.")
         except Exception as e:
+            logger.error(f"[FILTER APPLY] Error applying filter: {e}", exc_info=True)
             await callback.answer(f"Ошибка при применении фильтра: {str(e)}", show_alert=True)
 
 
@@ -3051,11 +3082,14 @@ def _build_request_summary(data: dict) -> str:
 
 def _specialist_filter_conditions(filter_payload: dict[str, Any] | None) -> list:
     """Строит условия фильтрации для заявок специалиста."""
+    logger.info(f"[SPECIALIST FILTER] Building conditions for filter_payload: {filter_payload}")
     if not filter_payload:
+        logger.info("[SPECIALIST FILTER] No filter_payload, returning empty conditions")
         return []
     
     # Поддержка старого формата фильтра для обратной совместимости
     if "mode" in filter_payload:
+        logger.info("[SPECIALIST FILTER] Using legacy filter format")
         mode = (filter_payload.get("mode") or "").strip().lower()
         value = (filter_payload.get("value") or "").strip()
         conditions: list = []
@@ -3071,10 +3105,14 @@ def _specialist_filter_conditions(filter_payload: dict[str, Any] | None) -> list
                     conditions.append(Request.created_at.between(start_dt, end_dt))
                 except ValueError:
                     pass
+        logger.info(f"[SPECIALIST FILTER] Legacy conditions: {conditions}")
         return conditions
     
     # Новый формат фильтра
-    return build_filter_conditions(filter_payload)
+    logger.info("[SPECIALIST FILTER] Using new filter format")
+    conditions = build_filter_conditions(filter_payload)
+    logger.info(f"[SPECIALIST FILTER] Final conditions: {conditions}")
+    return conditions
 
 
 def _specialist_filter_label(filter_payload: dict[str, Any] | None) -> str:
@@ -3263,32 +3301,53 @@ async def _fetch_specialist_requests_page(
     page: int,
     filter_payload: dict[str, Any] | None = None,
 ) -> tuple[list[Request], int, int, int]:
+    logger.info(f"[FETCH REQUESTS] Fetching page {page} for specialist_id {specialist_id}")
+    logger.info(f"[FETCH REQUESTS] filter_payload: {filter_payload}")
+    
     base_conditions = [Request.specialist_id == specialist_id]
+    logger.info(f"[FETCH REQUESTS] base_conditions: {base_conditions}")
+    
     conditions = _specialist_filter_conditions(filter_payload)
+    logger.info(f"[FETCH REQUESTS] filter conditions: {conditions}")
+    
     all_conditions = base_conditions + conditions
-    total = await session.scalar(select(func.count()).select_from(Request).where(*all_conditions))
+    logger.info(f"[FETCH REQUESTS] all_conditions count: {len(all_conditions)}")
+    logger.info(f"[FETCH REQUESTS] all_conditions: {all_conditions}")
+    
+    # Выполняем запрос на подсчет общего количества
+    count_query = select(func.count()).select_from(Request).where(*all_conditions)
+    logger.info(f"[FETCH REQUESTS] Executing count query")
+    total = await session.scalar(count_query)
     total = int(total or 0)
+    logger.info(f"[FETCH REQUESTS] Total requests found: {total}")
+    
     total_pages = total_pages_for(total, REQUESTS_PAGE_SIZE)
     page = clamp_page(page, total_pages)
-    requests = (
-        (
-            await session.execute(
-                select(Request)
-                .options(
-                    selectinload(Request.object),
-                    selectinload(Request.engineer),
-                    selectinload(Request.master),
-                    selectinload(Request.work_items),
-                )
-                .where(*all_conditions)
-                .order_by(Request.created_at.desc())
-                .limit(REQUESTS_PAGE_SIZE)
-                .offset(page * REQUESTS_PAGE_SIZE)
-            )
+    logger.info(f"[FETCH REQUESTS] Total pages: {total_pages}, clamped page: {page}")
+    
+    # Выполняем запрос на получение заявок
+    select_query = (
+        select(Request)
+        .options(
+            selectinload(Request.object),
+            selectinload(Request.engineer),
+            selectinload(Request.master),
+            selectinload(Request.work_items),
         )
-        .scalars()
-        .all()
+        .where(*all_conditions)
+        .order_by(Request.created_at.desc())
+        .limit(REQUESTS_PAGE_SIZE)
+        .offset(page * REQUESTS_PAGE_SIZE)
     )
+    logger.info(f"[FETCH REQUESTS] Executing select query with limit {REQUESTS_PAGE_SIZE}, offset {page * REQUESTS_PAGE_SIZE}")
+    
+    result = await session.execute(select_query)
+    requests = list(result.scalars().all())
+    logger.info(f"[FETCH REQUESTS] Retrieved {len(requests)} requests")
+    
+    if len(requests) > 0:
+        logger.info(f"[FETCH REQUESTS] First request ID: {requests[0].id}, number: {requests[0].number}")
+    
     return requests, page, total_pages, total
 
 
