@@ -72,6 +72,16 @@ async def _get_specialist(session, telegram_id: int) -> User | None:
     return None
 
 
+def _is_super_admin(user: User | None) -> bool:
+    """Проверяет, является ли пользователь суперадмином."""
+    return (
+        user is not None
+        and user.role == UserRole.MANAGER
+        and user.leader_profile is not None
+        and user.leader_profile.is_super_admin
+    )
+
+
 DEFECT_TYPES_PAGE_SIZE = 12
 
 
@@ -441,6 +451,7 @@ class CloseRequestStates(StatesGroup):
 
 class SpecialistFilterStates(StatesGroup):
     """Состояния для настройки фильтра заявок."""
+    scope_selection = State()  # Выбор области фильтрации (для суперадминов: свои/все заявки)
     main_menu = State()  # Главное меню фильтра
     status_selection = State()  # Выбор статусов
     object_selection = State()  # Выбор объекта
@@ -456,14 +467,17 @@ class SpecialistFilterStates(StatesGroup):
 
 
 @router.message(F.text == "📄 Мои заявки")
-async def specialist_requests(message: Message):
+async def specialist_requests(message: Message, state: FSMContext):
     async with async_session() as session:
         specialist = await _get_specialist(session, message.from_user.id)
         if not specialist:
             await message.answer("Эта функция доступна только специалистам отдела и суперадминам.")
             return
 
-        await _show_specialist_requests_list(message, session, specialist.id, page=0)
+        is_super = _is_super_admin(specialist)
+        data = await state.get_data()
+        filter_scope = data.get("filter_scope") if is_super else None
+        await _show_specialist_requests_list(message, session, specialist.id, page=0, is_super_admin=is_super, filter_scope=filter_scope)
 
 
 @router.callback_query(F.data.startswith("spec:list:"))
@@ -480,6 +494,9 @@ async def specialist_requests_page(callback: CallbackQuery, state: FSMContext):
         if not specialist:
             await callback.answer("Нет доступа.", show_alert=True)
             return
+        is_super = _is_super_admin(specialist)
+        data = await state.get_data()
+        filter_scope = data.get("filter_scope") if is_super else None
         # Убеждаемся, что фильтр не применяется
         await _show_specialist_requests_list(
             callback.message,
@@ -489,6 +506,8 @@ async def specialist_requests_page(callback: CallbackQuery, state: FSMContext):
             context="list",
             filter_payload=None,
             edit=True,
+            is_super_admin=is_super,
+            filter_scope=filter_scope,
         )
     await callback.answer()
 
@@ -508,6 +527,8 @@ async def specialist_filter_page(callback: CallbackQuery, state: FSMContext):
         if not specialist:
             await callback.answer("Нет доступа.", show_alert=True)
             return
+        is_super = _is_super_admin(specialist)
+        filter_scope = data.get("filter_scope") if is_super else None
         await _show_specialist_requests_list(
             callback.message,
             session,
@@ -516,6 +537,8 @@ async def specialist_filter_page(callback: CallbackQuery, state: FSMContext):
             context="filter",
             filter_payload=filter_payload,
             edit=True,
+            is_super_admin=is_super,
+            filter_scope=filter_scope,
         )
     await callback.answer()
 
@@ -533,21 +556,72 @@ async def specialist_filter_start(message: Message, state: FSMContext):
     data = await state.get_data()
     current_filter = data.get("spec_filter")
     
+    is_super = _is_super_admin(specialist)
+    
+    # Для суперадминов проверяем, выбран ли уже scope (область фильтрации)
+    if is_super:
+        filter_scope = data.get("filter_scope")  # "mine" или "all"
+        if not filter_scope:
+            # Показываем выбор области фильтрации
+            await state.set_state(SpecialistFilterStates.scope_selection)
+            builder = InlineKeyboardBuilder()
+            builder.button(text="📋 Только мои заявки", callback_data="spec:flt:scope:mine")
+            builder.button(text="🌐 Все заявки", callback_data="spec:flt:scope:all")
+            builder.adjust(1)
+            
+            await message.answer(
+                "🔍 <b>Фильтр заявок</b>\n\n"
+                "Выберите область фильтрации:",
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML",
+            )
+            return
+    
+    # Для обычных специалистов или если scope уже выбран - показываем основное меню
     await state.set_state(SpecialistFilterStates.main_menu)
     
     filter_info = ""
     if current_filter:
         filter_info = f"\n\n<b>Текущие настройки:</b>\n{format_filter_label(current_filter)}"
     
+    scope_text = "по всем заявкам" if (is_super and data.get("filter_scope") == "all") else "по вашим заявкам"
+    filter_scope = data.get("filter_scope") if is_super else None
     await message.answer(
         f"🔍 <b>Фильтр заявок</b>\n\n"
+        f"Фильтрация {scope_text}.\n"
         f"Выберите параметры фильтрации:{filter_info}",
-        reply_markup=_build_advanced_filter_menu_keyboard(current_filter),
+        reply_markup=_build_advanced_filter_menu_keyboard(current_filter, filter_scope=filter_scope),
         parse_mode="HTML",
     )
 
 
 # Старые обработчики фильтра удалены - используется новый расширенный фильтр
+
+
+@router.callback_query(F.data.startswith("spec:flt:scope:"))
+async def specialist_filter_scope_select(callback: CallbackQuery, state: FSMContext):
+    """Выбор области фильтрации для суперадмина (свои/все заявки)."""
+    scope = callback.data.split(":")[3]  # "mine" или "all"
+    
+    await state.update_data(filter_scope=scope)
+    await state.set_state(SpecialistFilterStates.main_menu)
+    
+    data = await state.get_data()
+    current_filter = data.get("spec_filter")
+    
+    scope_text = "по всем заявкам" if scope == "all" else "по вашим заявкам"
+    filter_info = ""
+    if current_filter:
+        filter_info = f"\n\n<b>Текущие настройки:</b>\n{format_filter_label(current_filter)}"
+    
+    await callback.message.edit_text(
+        f"🔍 <b>Фильтр заявок</b>\n\n"
+        f"Фильтрация {scope_text}.\n"
+        f"Выберите параметры фильтрации:{filter_info}",
+        reply_markup=_build_advanced_filter_menu_keyboard(current_filter, filter_scope=scope),
+        parse_mode="HTML",
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("spec:flt:quick:"))
@@ -573,6 +647,9 @@ async def specialist_filter_quick(callback: CallbackQuery, state: FSMContext):
         if not specialist:
             await callback.answer("Нет доступа.", show_alert=True)
             return
+        is_super = _is_super_admin(specialist)
+        data = await state.get_data()
+        filter_scope = data.get("filter_scope") if is_super else None
         await _show_specialist_requests_list(
             callback.message,
             session,
@@ -581,6 +658,8 @@ async def specialist_filter_quick(callback: CallbackQuery, state: FSMContext):
             context="filter",
             filter_payload=filter_payload,
             edit=True,
+            is_super_admin=is_super,
+            filter_scope=filter_scope,
         )
     await callback.answer()
 
@@ -588,12 +667,16 @@ async def specialist_filter_quick(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "spec:flt:clear")
 async def specialist_filter_clear(callback: CallbackQuery, state: FSMContext):
     await state.update_data(spec_filter=None)
+    # Для суперадминов не сбрасываем filter_scope при очистке фильтра
     await state.set_state(None)
     async with async_session() as session:
         specialist = await _get_specialist(session, callback.from_user.id)
         if not specialist:
             await callback.answer("Нет доступа.", show_alert=True)
             return
+        is_super = _is_super_admin(specialist)
+        data = await state.get_data()
+        filter_scope = data.get("filter_scope") if is_super else None
         await _show_specialist_requests_list(
             callback.message,
             session,
@@ -601,12 +684,17 @@ async def specialist_filter_clear(callback: CallbackQuery, state: FSMContext):
             page=0,
             context="list",
             edit=True,
+            is_super_admin=is_super,
+            filter_scope=filter_scope,
         )
     await callback.answer("Фильтр сброшен.")
 
 
 @router.callback_query(F.data == "spec:flt:cancel")
 async def specialist_filter_cancel(callback: CallbackQuery, state: FSMContext):
+    """Отмена настройки фильтра."""
+    # Очищаем фильтр, но сохраняем filter_scope для суперадминов
+    await state.update_data(spec_filter=None)
     await state.set_state(None)
     await callback.message.edit_text("Фильтр отменён.")
     await callback.answer()
@@ -617,20 +705,31 @@ async def specialist_filter_cancel(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "spec:flt:back")
 async def specialist_filter_back(callback: CallbackQuery, state: FSMContext):
     """Возврат в главное меню фильтра."""
-    data = await state.get_data()
-    current_filter = data.get("spec_filter")
-    await state.set_state(SpecialistFilterStates.main_menu)
-    
-    filter_info = ""
-    if current_filter:
-        filter_info = f"\n\n<b>Текущие настройки:</b>\n{format_filter_label(current_filter)}"
-    
-    await callback.message.edit_text(
-        f"🔍 <b>Фильтр заявок</b>\n\n"
-        f"Выберите параметры фильтрации:{filter_info}",
-        reply_markup=_build_advanced_filter_menu_keyboard(current_filter),
-        parse_mode="HTML",
-    )
+    async with async_session() as session:
+        specialist = await _get_specialist(session, callback.from_user.id)
+        if not specialist:
+            await callback.answer("Нет доступа.", show_alert=True)
+            return
+        
+        is_super = _is_super_admin(specialist)
+        data = await state.get_data()
+        current_filter = data.get("spec_filter")
+        filter_scope = data.get("filter_scope")
+        
+        await state.set_state(SpecialistFilterStates.main_menu)
+        
+        filter_info = ""
+        if current_filter:
+            filter_info = f"\n\n<b>Текущие настройки:</b>\n{format_filter_label(current_filter)}"
+        
+        scope_text = "по всем заявкам" if (is_super and filter_scope == "all") else "по вашим заявкам"
+        await callback.message.edit_text(
+            f"🔍 <b>Фильтр заявок</b>\n\n"
+            f"Фильтрация {scope_text}.\n"
+            f"Выберите параметры фильтрации:{filter_info}",
+            reply_markup=_build_advanced_filter_menu_keyboard(current_filter, filter_scope=filter_scope),
+            parse_mode="HTML",
+        )
     await callback.answer()
 
 
@@ -818,13 +917,19 @@ async def specialist_filter_date_input(message: Message, state: FSMContext):
         await state.set_state(SpecialistFilterStates.main_menu)
         data = await state.get_data()
         current_filter = data.get("spec_filter")
+        async with async_session() as session:
+            specialist = await _get_specialist(session, message.from_user.id)
+            is_super = _is_super_admin(specialist) if specialist else False
+            filter_scope = data.get("filter_scope") if is_super else None
         filter_info = ""
         if current_filter:
             filter_info = f"\n\n<b>Текущие настройки:</b>\n{format_filter_label(current_filter)}"
+        scope_text = "по всем заявкам" if (is_super and filter_scope == "all") else "по вашим заявкам"
         await message.answer(
             f"🔍 <b>Фильтр заявок</b>\n\n"
+            f"Фильтрация {scope_text}.\n"
             f"Выберите параметры фильтрации:{filter_info}",
-            reply_markup=_build_advanced_filter_menu_keyboard(current_filter),
+            reply_markup=_build_advanced_filter_menu_keyboard(current_filter, filter_scope=filter_scope),
             parse_mode="HTML",
         )
         return
@@ -852,15 +957,23 @@ async def specialist_filter_date_input(message: Message, state: FSMContext):
     await state.update_data(spec_filter=current_filter)
     await state.set_state(SpecialistFilterStates.main_menu)
     
+    async with async_session() as session:
+        specialist = await _get_specialist(session, message.from_user.id)
+        is_super = _is_super_admin(specialist) if specialist else False
+        data = await state.get_data()
+        filter_scope = data.get("filter_scope") if is_super else None
+    
     filter_info = ""
     if current_filter:
         filter_info = f"\n\n<b>Текущие настройки:</b>\n{format_filter_label(current_filter)}"
     
+    scope_text = "по всем заявкам" if (is_super and filter_scope == "all") else "по вашим заявкам"
     await message.answer(
         f"✅ Период сохранён.\n\n"
         f"🔍 <b>Фильтр заявок</b>\n\n"
+        f"Фильтрация {scope_text}.\n"
         f"Выберите параметры фильтрации:{filter_info}",
-        reply_markup=_build_advanced_filter_menu_keyboard(current_filter),
+        reply_markup=_build_advanced_filter_menu_keyboard(current_filter, filter_scope=filter_scope),
         parse_mode="HTML",
     )
 
@@ -997,7 +1110,10 @@ async def specialist_filter_apply(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Нет доступа.", show_alert=True)
             return
         
-        logger.info(f"[FILTER APPLY] Applying filter for specialist_id: {specialist.id}")
+        is_super = _is_super_admin(specialist)
+        data = await state.get_data()
+        filter_scope = data.get("filter_scope") if is_super else None
+        logger.info(f"[FILTER APPLY] Applying filter for specialist_id: {specialist.id}, is_super_admin: {is_super}, filter_scope: {filter_scope}")
         try:
             await _show_specialist_requests_list(
                 callback.message,
@@ -1007,6 +1123,8 @@ async def specialist_filter_apply(callback: CallbackQuery, state: FSMContext):
                 context="filter",
                 filter_payload=cleaned_filter,
                 edit=True,
+                is_super_admin=is_super,
+                filter_scope=filter_scope,
             )
             logger.info("[FILTER APPLY] Filter applied successfully")
             await callback.answer("Фильтр применён.")
@@ -1036,13 +1154,19 @@ async def specialist_filter_address_input(message: Message, state: FSMContext):
         await state.set_state(SpecialistFilterStates.main_menu)
         data = await state.get_data()
         current_filter = data.get("spec_filter")
+        async with async_session() as session:
+            specialist = await _get_specialist(session, message.from_user.id)
+            is_super = _is_super_admin(specialist) if specialist else False
+            filter_scope = data.get("filter_scope") if is_super else None
         filter_info = ""
         if current_filter:
             filter_info = f"\n\n<b>Текущие настройки:</b>\n{format_filter_label(current_filter)}"
+        scope_text = "по всем заявкам" if (is_super and filter_scope == "all") else "по вашим заявкам"
         await message.answer(
             f"🔍 <b>Фильтр заявок</b>\n\n"
+            f"Фильтрация {scope_text}.\n"
             f"Выберите параметры фильтрации:{filter_info}",
-            reply_markup=_build_advanced_filter_menu_keyboard(current_filter),
+            reply_markup=_build_advanced_filter_menu_keyboard(current_filter, filter_scope=filter_scope),
             parse_mode="HTML",
         )
         return
@@ -1057,15 +1181,23 @@ async def specialist_filter_address_input(message: Message, state: FSMContext):
     await state.update_data(spec_filter=current_filter)
     await state.set_state(SpecialistFilterStates.main_menu)
     
+    async with async_session() as session:
+        specialist = await _get_specialist(session, message.from_user.id)
+        is_super = _is_super_admin(specialist) if specialist else False
+        data = await state.get_data()
+        filter_scope = data.get("filter_scope") if is_super else None
+    
     filter_info = ""
     if current_filter:
         filter_info = f"\n\n<b>Текущие настройки:</b>\n{format_filter_label(current_filter)}"
     
+    scope_text = "по всем заявкам" if (is_super and filter_scope == "all") else "по вашим заявкам"
     await message.answer(
         f"✅ Адрес сохранён.\n\n"
         f"🔍 <b>Фильтр заявок</b>\n\n"
+        f"Фильтрация {scope_text}.\n"
         f"Выберите параметры фильтрации:{filter_info}",
-        reply_markup=_build_advanced_filter_menu_keyboard(current_filter),
+        reply_markup=_build_advanced_filter_menu_keyboard(current_filter, filter_scope=filter_scope),
         parse_mode="HTML",
     )
 
@@ -1091,13 +1223,19 @@ async def specialist_filter_contact_input(message: Message, state: FSMContext):
         await state.set_state(SpecialistFilterStates.main_menu)
         data = await state.get_data()
         current_filter = data.get("spec_filter")
+        async with async_session() as session:
+            specialist = await _get_specialist(session, message.from_user.id)
+            is_super = _is_super_admin(specialist) if specialist else False
+            filter_scope = data.get("filter_scope") if is_super else None
         filter_info = ""
         if current_filter:
             filter_info = f"\n\n<b>Текущие настройки:</b>\n{format_filter_label(current_filter)}"
+        scope_text = "по всем заявкам" if (is_super and filter_scope == "all") else "по вашим заявкам"
         await message.answer(
             f"🔍 <b>Фильтр заявок</b>\n\n"
+            f"Фильтрация {scope_text}.\n"
             f"Выберите параметры фильтрации:{filter_info}",
-            reply_markup=_build_advanced_filter_menu_keyboard(current_filter),
+            reply_markup=_build_advanced_filter_menu_keyboard(current_filter, filter_scope=filter_scope),
             parse_mode="HTML",
         )
         return
@@ -1112,15 +1250,23 @@ async def specialist_filter_contact_input(message: Message, state: FSMContext):
     await state.update_data(spec_filter=current_filter)
     await state.set_state(SpecialistFilterStates.main_menu)
     
+    async with async_session() as session:
+        specialist = await _get_specialist(session, message.from_user.id)
+        is_super = _is_super_admin(specialist) if specialist else False
+        data = await state.get_data()
+        filter_scope = data.get("filter_scope") if is_super else None
+    
     filter_info = ""
     if current_filter:
         filter_info = f"\n\n<b>Текущие настройки:</b>\n{format_filter_label(current_filter)}"
     
+    scope_text = "по всем заявкам" if (is_super and filter_scope == "all") else "по вашим заявкам"
     await message.answer(
         f"✅ Контактное лицо сохранено.\n\n"
         f"🔍 <b>Фильтр заявок</b>\n\n"
+        f"Фильтрация {scope_text}.\n"
         f"Выберите параметры фильтрации:{filter_info}",
-        reply_markup=_build_advanced_filter_menu_keyboard(current_filter),
+        reply_markup=_build_advanced_filter_menu_keyboard(current_filter, filter_scope=filter_scope),
         parse_mode="HTML",
     )
 
@@ -1400,13 +1546,19 @@ async def specialist_filter_number_input(message: Message, state: FSMContext):
         await state.set_state(SpecialistFilterStates.main_menu)
         data = await state.get_data()
         current_filter = data.get("spec_filter")
+        async with async_session() as session:
+            specialist = await _get_specialist(session, message.from_user.id)
+            is_super = _is_super_admin(specialist) if specialist else False
+            filter_scope = data.get("filter_scope") if is_super else None
         filter_info = ""
         if current_filter:
             filter_info = f"\n\n<b>Текущие настройки:</b>\n{format_filter_label(current_filter)}"
+        scope_text = "по всем заявкам" if (is_super and filter_scope == "all") else "по вашим заявкам"
         await message.answer(
             f"🔍 <b>Фильтр заявок</b>\n\n"
+            f"Фильтрация {scope_text}.\n"
             f"Выберите параметры фильтрации:{filter_info}",
-            reply_markup=_build_advanced_filter_menu_keyboard(current_filter),
+            reply_markup=_build_advanced_filter_menu_keyboard(current_filter, filter_scope=filter_scope),
             parse_mode="HTML",
         )
         return
@@ -1421,15 +1573,23 @@ async def specialist_filter_number_input(message: Message, state: FSMContext):
     await state.update_data(spec_filter=current_filter)
     await state.set_state(SpecialistFilterStates.main_menu)
     
+    async with async_session() as session:
+        specialist = await _get_specialist(session, message.from_user.id)
+        is_super = _is_super_admin(specialist) if specialist else False
+        data = await state.get_data()
+        filter_scope = data.get("filter_scope") if is_super else None
+    
     filter_info = ""
     if current_filter:
         filter_info = f"\n\n<b>Текущие настройки:</b>\n{format_filter_label(current_filter)}"
     
+    scope_text = "по всем заявкам" if (is_super and filter_scope == "all") else "по вашим заявкам"
     await message.answer(
         f"✅ Номер заявки сохранён.\n\n"
         f"🔍 <b>Фильтр заявок</b>\n\n"
+        f"Фильтрация {scope_text}.\n"
         f"Выберите параметры фильтрации:{filter_info}",
-        reply_markup=_build_advanced_filter_menu_keyboard(current_filter),
+        reply_markup=_build_advanced_filter_menu_keyboard(current_filter, filter_scope=filter_scope),
         parse_mode="HTML",
     )
 
@@ -1892,8 +2052,11 @@ async def specialist_delete_confirm(callback: CallbackQuery, state: FSMContext):
 
         if return_to_list:
             context = "filter" if ctx_key == "filter" else "list"
-            filter_payload = (await state.get_data()).get("spec_filter") if context == "filter" else None
-            _, _, total_pages, _ = await _fetch_specialist_requests_page(session, specialist.id, 0, filter_payload=filter_payload)
+            data = await state.get_data()
+            filter_payload = data.get("spec_filter") if context == "filter" else None
+            is_super = _is_super_admin(specialist)
+            filter_scope = data.get("filter_scope") if is_super else None
+            _, _, total_pages, _ = await _fetch_specialist_requests_page(session, specialist.id, 0, filter_payload=filter_payload, is_super_admin=is_super, filter_scope=filter_scope)
             safe_page = min(page, max(0, total_pages - 1)) if total_pages else 0
             await _show_specialist_requests_list(
                 callback.message,
@@ -1903,6 +2066,8 @@ async def specialist_delete_confirm(callback: CallbackQuery, state: FSMContext):
                 context=context,
                 filter_payload=filter_payload,
                 edit=True,
+                is_super_admin=is_super,
+                filter_scope=filter_scope,
             )
             await callback.answer("Заявка удалена из базы")
             return
@@ -2224,6 +2389,8 @@ async def specialist_back_to_list(callback: CallbackQuery, state: FSMContext):
         if not specialist:
             await callback.answer("Нет доступа.", show_alert=True)
             return
+        is_super = _is_super_admin(specialist)
+        filter_scope = data.get("filter_scope") if is_super else None
         await _show_specialist_requests_list(
             callback.message,
             session,
@@ -2232,6 +2399,8 @@ async def specialist_back_to_list(callback: CallbackQuery, state: FSMContext):
             context=context,
             filter_payload=filter_payload,
             edit=True,
+            is_super_admin=is_super,
+            filter_scope=filter_scope,
         )
     await callback.answer()
 
@@ -3138,9 +3307,16 @@ def _specialist_filter_label(filter_payload: dict[str, Any] | None) -> str:
     return format_filter_label(filter_payload)
 
 
-def _build_advanced_filter_menu_keyboard(current_filter: dict[str, Any] | None = None) -> InlineKeyboardMarkup:
+def _build_advanced_filter_menu_keyboard(current_filter: dict[str, Any] | None = None, filter_scope: str | None = None) -> InlineKeyboardMarkup:
     """Строит главное меню расширенного фильтра согласно дизайну."""
     builder = InlineKeyboardBuilder()
+    
+    # Для суперадминов добавляем кнопку переключения области фильтрации в начале
+    if filter_scope is not None:
+        scope_text = "🌐 Все заявки" if filter_scope == "all" else "📋 Только мои заявки"
+        scope_callback = "spec:flt:scope:mine" if filter_scope == "all" else "spec:flt:scope:all"
+        builder.button(text=scope_text, callback_data=scope_callback)
+        builder.adjust(1)  # Кнопка области фильтрации в отдельной строке
     
     # Первая строка: По адресу, по контакту, По ЖК
     address_text = "🏠 По адресу"
@@ -3296,11 +3472,26 @@ async def _fetch_specialist_requests_page(
     specialist_id: int,
     page: int,
     filter_payload: dict[str, Any] | None = None,
+    is_super_admin: bool = False,
+    filter_scope: str | None = None,  # "mine" или "all" для суперадминов
 ) -> tuple[list[Request], int, int, int]:
-    logger.info(f"[FETCH REQUESTS] Fetching page {page} for specialist_id {specialist_id}")
+    logger.info(f"[FETCH REQUESTS] Fetching page {page} for specialist_id {specialist_id}, is_super_admin: {is_super_admin}, filter_scope: {filter_scope}")
     logger.info(f"[FETCH REQUESTS] filter_payload: {filter_payload}")
     
-    base_conditions = [Request.specialist_id == specialist_id]
+    # Определяем, нужно ли ограничивать по specialist_id
+    # Для суперадмина: если filter_scope == "all", показываем все заявки; если "mine" - только свои
+    # Для обычного специалиста: всегда только свои заявки
+    base_conditions = []
+    if is_super_admin:
+        if filter_scope == "all":
+            logger.info(f"[FETCH REQUESTS] Super admin mode - showing ALL requests (no specialist_id filter)")
+        else:
+            # По умолчанию для суперадмина показываем только свои, если не указано иное
+            base_conditions.append(Request.specialist_id == specialist_id)
+            logger.info(f"[FETCH REQUESTS] Super admin mode - showing OWN requests (specialist_id: {specialist_id})")
+    else:
+        base_conditions.append(Request.specialist_id == specialist_id)
+        logger.info(f"[FETCH REQUESTS] Regular specialist - adding specialist_id filter: {specialist_id}")
     logger.info(f"[FETCH REQUESTS] base_conditions: {base_conditions}")
     
     conditions = _specialist_filter_conditions(filter_payload)
@@ -3356,12 +3547,16 @@ async def _show_specialist_requests_list(
     context: str = "list",
     filter_payload: dict[str, Any] | None = None,
     edit: bool = False,
+    is_super_admin: bool = False,
+    filter_scope: str | None = None,
 ) -> None:
     requests, page, total_pages, total = await _fetch_specialist_requests_page(
         session,
         specialist_id,
         page,
         filter_payload=filter_payload,
+        is_super_admin=is_super_admin,
+        filter_scope=filter_scope,
     )
 
     if not requests:
