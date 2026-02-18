@@ -573,14 +573,6 @@ class RequestService:
                 f"текущий статус: {get_request_status_title(request.status)}"
             )
         
-        # Проверяем, что работы завершены
-        if not request.work_completed_at:
-            reasons.append("Работы должны быть завершены мастером")
-        
-        # Проверяем, что мастер назначен и завершил работы
-        if not request.master_id:
-            reasons.append("Мастер не назначен")
-        
         # Проверяем, что инженер провёл осмотр
         if not request.inspection_completed_at:
             reasons.append("Осмотр должен быть завершён инженером")
