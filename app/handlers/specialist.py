@@ -1880,7 +1880,11 @@ async def specialist_request_detail(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Нет доступа к заявке.", show_alert=True)
             return
 
-        request = await session.scalar(
+        # Проверяем, является ли пользователь суперадмином
+        is_super_admin = _is_super_admin(specialist)
+        
+        # Формируем запрос с учетом прав доступа
+        query = (
             select(Request)
             .options(
                 selectinload(Request.engineer),
@@ -1891,8 +1895,14 @@ async def specialist_request_detail(callback: CallbackQuery, state: FSMContext):
                 selectinload(Request.acts),
                 selectinload(Request.feedback),
             )
-            .where(Request.id == request_id, Request.specialist_id == specialist.id)
+            .where(Request.id == request_id)
         )
+        
+        # Если пользователь не суперадмин, ограничиваем заявки только теми, что закреплены за ним
+        if not is_super_admin:
+            query = query.where(Request.specialist_id == specialist.id)
+        
+        request = await session.scalar(query)
         if not request:
             await callback.message.edit_text("Заявка не найдена или была удалена.")
             await callback.answer()
@@ -1997,9 +2007,16 @@ async def specialist_delete_prompt(callback: CallbackQuery):
         if not specialist:
             await callback.answer("Нет доступа.", show_alert=True)
             return
-        request = await session.scalar(
-            select(Request).where(Request.id == request_id, Request.specialist_id == specialist.id)
-        )
+        
+        # Проверяем, является ли пользователь суперадмином
+        is_super_admin = _is_super_admin(specialist)
+        
+        # Формируем запрос с учетом прав доступа
+        query = select(Request).where(Request.id == request_id)
+        if not is_super_admin:
+            query = query.where(Request.specialist_id == specialist.id)
+        
+        request = await session.scalar(query)
     if not request:
         await callback.answer("Заявка не найдена.", show_alert=True)
         return
@@ -2038,9 +2055,16 @@ async def specialist_delete_confirm(callback: CallbackQuery, state: FSMContext):
         if not specialist:
             await callback.answer("Нет доступа.", show_alert=True)
             return
-        request = await session.scalar(
-            select(Request).where(Request.id == request_id, Request.specialist_id == specialist.id)
-        )
+        
+        # Проверяем, является ли пользователь суперадмином
+        is_super_admin = _is_super_admin(specialist)
+        
+        # Формируем запрос с учетом прав доступа
+        query = select(Request).where(Request.id == request_id)
+        if not is_super_admin:
+            query = query.where(Request.specialist_id == specialist.id)
+        
+        request = await session.scalar(query)
         if not request:
             await callback.answer("Заявка не найдена.", show_alert=True)
             return
@@ -2087,11 +2111,19 @@ async def specialist_view_photos(callback: CallbackQuery):
             await callback.answer("Нет доступа к заявке.", show_alert=True)
             return
 
-        request = await session.scalar(
+        # Проверяем, является ли пользователь суперадмином
+        is_super_admin = _is_super_admin(specialist)
+        
+        # Формируем запрос с учетом прав доступа
+        query = (
             select(Request)
             .options(selectinload(Request.photos))
-            .where(Request.id == request_id, Request.specialist_id == specialist.id)
+            .where(Request.id == request_id)
         )
+        if not is_super_admin:
+            query = query.where(Request.specialist_id == specialist.id)
+        
+        request = await session.scalar(query)
         
         if not request:
             await callback.answer("Заявка не найдена.", show_alert=True)
@@ -2120,14 +2152,22 @@ async def specialist_close_info(callback: CallbackQuery):
             await callback.answer("Нет доступа.", show_alert=True)
             return
         
-        request = await session.scalar(
+        # Проверяем, является ли пользователь суперадмином
+        is_super_admin = _is_super_admin(specialist)
+        
+        # Формируем запрос с учетом прав доступа
+        query = (
             select(Request)
             .options(
                 selectinload(Request.engineer),
                 selectinload(Request.master),
             )
-            .where(Request.id == request_id, Request.specialist_id == specialist.id)
+            .where(Request.id == request_id)
         )
+        if not is_super_admin:
+            query = query.where(Request.specialist_id == specialist.id)
+        
+        request = await session.scalar(query)
         
         if not request:
             await callback.answer("Заявка не найдена.", show_alert=True)
@@ -2159,14 +2199,22 @@ async def specialist_start_close(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Нет доступа.", show_alert=True)
             return
         
-        request = await session.scalar(
+        # Проверяем, является ли пользователь суперадмином
+        is_super_admin = _is_super_admin(specialist)
+        
+        # Формируем запрос с учетом прав доступа
+        query = (
             select(Request)
             .options(
                 selectinload(Request.engineer),
                 selectinload(Request.master),
             )
-            .where(Request.id == request_id, Request.specialist_id == specialist.id)
+            .where(Request.id == request_id)
         )
+        if not is_super_admin:
+            query = query.where(Request.specialist_id == specialist.id)
+        
+        request = await session.scalar(query)
         
         if not request:
             await callback.answer("Заявка не найдена.", show_alert=True)
@@ -2245,14 +2293,22 @@ async def specialist_close_confirm(callback: CallbackQuery, state: FSMContext):
             await state.clear()
             return
         
-        request = await session.scalar(
+        # Проверяем, является ли пользователь суперадмином
+        is_super_admin = _is_super_admin(specialist)
+        
+        # Формируем запрос с учетом прав доступа
+        query = (
             select(Request)
             .options(
                 selectinload(Request.engineer),
                 selectinload(Request.master),
             )
-            .where(Request.id == request_id, Request.specialist_id == specialist.id)
+            .where(Request.id == request_id)
         )
+        if not is_super_admin:
+            query = query.where(Request.specialist_id == specialist.id)
+        
+        request = await session.scalar(query)
         
         if not request:
             await callback.answer("Заявка не найдена.", show_alert=True)
@@ -2337,15 +2393,22 @@ async def specialist_open_file(callback: CallbackQuery):
             await callback.answer("Нет доступа.", show_alert=True)
             return
         
-        act = await session.scalar(
+        # Проверяем, является ли пользователь суперадмином
+        is_super_admin = _is_super_admin(specialist)
+        
+        # Формируем запрос с учетом прав доступа
+        query = (
             select(Act)
             .join(Request)
             .where(
                 Act.id == act_id,
                 Act.type == ActType.LETTER,
-                Request.specialist_id == specialist.id,
             )
         )
+        if not is_super_admin:
+            query = query.where(Request.specialist_id == specialist.id)
+        
+        act = await session.scalar(query)
         
         if not act:
             await callback.answer("Файл не найден.", show_alert=True)
