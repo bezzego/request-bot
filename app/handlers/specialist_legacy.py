@@ -43,6 +43,24 @@ from app.utils.advanced_filters import (
     get_available_objects,
     DateFilterMode,
 )
+# Импортируем функции клавиатур и утилит из модуля filters
+from app.handlers.specialist.filters.keyboards import (
+    build_advanced_filter_menu_keyboard as _build_advanced_filter_menu_keyboard,
+    build_status_selection_keyboard as _build_status_selection_keyboard,
+    build_object_selection_keyboard as _build_object_selection_keyboard,
+    build_date_mode_keyboard as _build_date_mode_keyboard,
+    build_filter_cancel_keyboard as _specialist_filter_cancel_keyboard,
+)
+from app.handlers.specialist.filters.utils import (
+    specialist_filter_conditions as _specialist_filter_conditions,
+    specialist_filter_label as _specialist_filter_label,
+    clean_filter_payload as _clean_filter_payload,
+)
+# Импортируем функции списка заявок из модуля list
+from app.handlers.specialist.list import (
+    show_specialist_requests_list as _show_specialist_requests_list,
+    fetch_specialist_requests_page as _fetch_specialist_requests_page,
+)
 
 router = Router()
 
@@ -50,90 +68,34 @@ SPEC_CALENDAR_PREFIX = "spec_inspection"
 SPEC_DUE_CALENDAR_PREFIX = "spec_due"
 REQUESTS_PAGE_SIZE = 10
 
+# Импортируем функции из utils
+from app.handlers.specialist.utils import (
+    get_specialist as _get_specialist,
+    is_super_admin as _is_super_admin,
+    get_defect_types_page as _get_defect_types_page,
+    get_objects_page as _get_objects_page,
+    get_saved_objects as _get_saved_objects,
+    get_saved_addresses as _get_saved_addresses,
+    get_addresses_page as _get_addresses_page,
+    get_addresses_for_keyboard as _get_addresses_for_keyboard,
+    get_contracts_page as _get_contracts_page,
+    get_saved_contracts as _get_saved_contracts,
+    object_keyboard as _object_keyboard,
+    address_keyboard as _address_keyboard,
+    contract_keyboard as _contract_keyboard,
+    defect_type_keyboard as _defect_type_keyboard,
+    REQUESTS_PAGE_SIZE as REQUESTS_PAGE_SIZE_UTILS,
+)
 
-async def _get_specialist(session, telegram_id: int) -> User | None:
-    """Получает специалиста или суперадмина."""
-    user = await session.scalar(
-        select(User)
-        .options(selectinload(User.leader_profile))
-        .where(User.telegram_id == telegram_id)
-    )
-    if not user:
-        return None
-    
-    # Проверяем, является ли пользователь специалистом
-    if user.role == UserRole.SPECIALIST:
-        return user
-    
-    # Проверяем, является ли пользователь суперадмином
-    if user.role == UserRole.MANAGER and user.leader_profile and user.leader_profile.is_super_admin:
-        return user
-    
-    return None
-
-
-def _is_super_admin(user: User | None) -> bool:
-    """Проверяет, является ли пользователь суперадмином."""
-    return (
-        user is not None
-        and user.role == UserRole.MANAGER
-        and user.leader_profile is not None
-        and user.leader_profile.is_super_admin
-    )
-
-
+# Используем константы из utils
 DEFECT_TYPES_PAGE_SIZE = 12
-
-
-async def _get_defect_types_page(
-    session, page: int = 0, page_size: int = DEFECT_TYPES_PAGE_SIZE
-) -> tuple[list[DefectType], int, int]:
-    """Возвращает (список типов дефектов для страницы, текущая страница, всего страниц)."""
-    total = await session.scalar(select(func.count()).select_from(DefectType))
-    total = int(total or 0)
-    total_pages = max(1, (total + page_size - 1) // page_size)
-    page = max(0, min(page, total_pages - 1))
-    offset = page * page_size
-    items = (
-        (
-            await session.execute(
-                select(DefectType)
-                .order_by(DefectType.name.asc())
-                .limit(page_size)
-                .offset(offset)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    return items, page, total_pages
-
-
 OBJECTS_PAGE_SIZE = 12
+ADDRESSES_PAGE_SIZE = 12
+CONTRACTS_PAGE_SIZE = 12
 
 
-async def _get_objects_page(
-    session, page: int = 0, page_size: int = OBJECTS_PAGE_SIZE
-) -> tuple[list[Object], int, int]:
-    """Возвращает (список объектов для страницы, текущая страница, всего страниц)."""
-    total = await session.scalar(select(func.count()).select_from(Object))
-    total = int(total or 0)
-    total_pages = max(1, (total + page_size - 1) // page_size)
-    page = max(0, min(page, total_pages - 1))
-    offset = page * page_size
-    items = (
-        (
-            await session.execute(
-                select(Object)
-                .order_by(Object.name.asc())
-                .limit(page_size)
-                .offset(offset)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    return items, page, total_pages
+# Функции теперь импортируются из utils.py
+# Оставляем только алиасы для обратной совместимости
 
 
 async def _get_saved_objects(session, limit: int = 10) -> list[Object]:
@@ -425,23 +387,9 @@ async def _prompt_inspection_location(message: Message):
     await message.answer("Место осмотра (если отличается от адреса). Если совпадает — отправьте «-».")
 
 
-class NewRequestStates(StatesGroup):
-    title = State()
-    description = State()
-    object_name = State()
-    address = State()
-    apartment = State()
-    contact_person = State()
-    contact_phone = State()
-    contract_number = State()
-    defect_type = State()
-    inspection_datetime = State()
-    inspection_time = State()
-    inspection_location = State()
-    engineer = State()
-    due_date = State()
-    letter = State()
-    confirmation = State()
+# Состояния NewRequestStates перенесены в app/handlers/specialist/create/
+# Импортируем из нового модуля
+from app.handlers.specialist.create import NewRequestStates
 
 
 class CloseRequestStates(StatesGroup):
@@ -543,199 +491,15 @@ async def specialist_filter_page(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(F.text == "🔍 Фильтр заявок")
-async def specialist_filter_start(message: Message, state: FSMContext):
-    """Открывает новое расширенное меню фильтра для всех специалистов и супер-админов."""
-    async with async_session() as session:
-        specialist = await _get_specialist(session, message.from_user.id)
-        if not specialist:
-            await message.answer("Эта функция доступна только специалистам отдела и суперадминам.")
-            return
-
-    # Загружаем текущий фильтр из state
-    data = await state.get_data()
-    current_filter = data.get("spec_filter")
-    
-    is_super = _is_super_admin(specialist)
-    
-    # Для суперадминов проверяем, выбран ли уже scope (область фильтрации)
-    if is_super:
-        filter_scope = data.get("filter_scope")  # "mine" или "all"
-        if not filter_scope:
-            # Показываем выбор области фильтрации
-            await state.set_state(SpecialistFilterStates.scope_selection)
-            builder = InlineKeyboardBuilder()
-            builder.button(text="📋 Только мои заявки", callback_data="spec:flt:scope:mine")
-            builder.button(text="🌐 Все заявки", callback_data="spec:flt:scope:all")
-            builder.adjust(1)
-            
-            await message.answer(
-                "🔍 <b>Фильтр заявок</b>\n\n"
-                "Выберите область фильтрации:",
-                reply_markup=builder.as_markup(),
-                parse_mode="HTML",
-            )
-            return
-    
-    # Для обычных специалистов или если scope уже выбран - показываем основное меню
-    await state.set_state(SpecialistFilterStates.main_menu)
-    
-    filter_info = ""
-    if current_filter:
-        filter_info = f"\n\n<b>Текущие настройки:</b>\n{format_filter_label(current_filter)}"
-    
-    scope_text = "по всем заявкам" if (is_super and data.get("filter_scope") == "all") else "по вашим заявкам"
-    filter_scope = data.get("filter_scope") if is_super else None
-    await message.answer(
-        f"🔍 <b>Фильтр заявок</b>\n\n"
-        f"Фильтрация {scope_text}.\n"
-        f"Выберите параметры фильтрации:{filter_info}",
-        reply_markup=_build_advanced_filter_menu_keyboard(current_filter, filter_scope=filter_scope),
-        parse_mode="HTML",
-    )
-
-
-# Старые обработчики фильтра удалены - используется новый расширенный фильтр
-
-
-@router.callback_query(F.data.startswith("spec:flt:scope:"))
-async def specialist_filter_scope_select(callback: CallbackQuery, state: FSMContext):
-    """Выбор области фильтрации для суперадмина (свои/все заявки)."""
-    scope = callback.data.split(":")[3]  # "mine" или "all"
-    
-    await state.update_data(filter_scope=scope)
-    await state.set_state(SpecialistFilterStates.main_menu)
-    
-    data = await state.get_data()
-    current_filter = data.get("spec_filter")
-    
-    scope_text = "по всем заявкам" if scope == "all" else "по вашим заявкам"
-    filter_info = ""
-    if current_filter:
-        filter_info = f"\n\n<b>Текущие настройки:</b>\n{format_filter_label(current_filter)}"
-    
-    await callback.message.edit_text(
-        f"🔍 <b>Фильтр заявок</b>\n\n"
-        f"Фильтрация {scope_text}.\n"
-        f"Выберите параметры фильтрации:{filter_info}",
-        reply_markup=_build_advanced_filter_menu_keyboard(current_filter, filter_scope=scope),
-        parse_mode="HTML",
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("spec:flt:quick:"))
-async def specialist_filter_quick(callback: CallbackQuery, state: FSMContext):
-    """Быстрый выбор периода (использует новый формат фильтра)."""
-    code = callback.data.split(":")[3]
-    quick = quick_date_range(code)
-    if not quick:
-        await callback.answer("Неизвестный период.", show_alert=True)
-        return
-    start, end, label = quick
-    # Используем новый формат фильтра
-    filter_payload = {
-        "date_mode": DateFilterMode.CREATED,
-        "date_start": start.isoformat(),
-        "date_end": end.isoformat(),
-    }
-    await state.update_data(spec_filter=filter_payload)
-    await state.set_state(None)
-
-    async with async_session() as session:
-        specialist = await _get_specialist(session, callback.from_user.id)
-        if not specialist:
-            await callback.answer("Нет доступа.", show_alert=True)
-            return
-        is_super = _is_super_admin(specialist)
-        data = await state.get_data()
-        filter_scope = data.get("filter_scope") if is_super else None
-        await _show_specialist_requests_list(
-            callback.message,
-            session,
-            specialist.id,
-            page=0,
-            context="filter",
-            filter_payload=filter_payload,
-            edit=True,
-            is_super_admin=is_super,
-            filter_scope=filter_scope,
-        )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "spec:flt:clear")
-async def specialist_filter_clear(callback: CallbackQuery, state: FSMContext):
-    await state.update_data(spec_filter=None)
-    # Для суперадминов не сбрасываем filter_scope при очистке фильтра
-    await state.set_state(None)
-    async with async_session() as session:
-        specialist = await _get_specialist(session, callback.from_user.id)
-        if not specialist:
-            await callback.answer("Нет доступа.", show_alert=True)
-            return
-        is_super = _is_super_admin(specialist)
-        data = await state.get_data()
-        filter_scope = data.get("filter_scope") if is_super else None
-        await _show_specialist_requests_list(
-            callback.message,
-            session,
-            specialist.id,
-            page=0,
-            context="list",
-            edit=True,
-            is_super_admin=is_super,
-            filter_scope=filter_scope,
-        )
-    await callback.answer("Фильтр сброшен.")
-
-
-@router.callback_query(F.data == "spec:flt:cancel")
-async def specialist_filter_cancel(callback: CallbackQuery, state: FSMContext):
-    """Отмена настройки фильтра."""
-    # Очищаем фильтр, но сохраняем filter_scope для суперадминов
-    await state.update_data(spec_filter=None)
-    await state.set_state(None)
-    await callback.message.edit_text("Фильтр отменён.")
-    await callback.answer()
-
-
-# Новые обработчики расширенного фильтра
-
-@router.callback_query(F.data == "spec:flt:back")
-async def specialist_filter_back(callback: CallbackQuery, state: FSMContext):
-    """Возврат в главное меню фильтра."""
-    async with async_session() as session:
-        specialist = await _get_specialist(session, callback.from_user.id)
-        if not specialist:
-            await callback.answer("Нет доступа.", show_alert=True)
-            return
-        
-        is_super = _is_super_admin(specialist)
-        data = await state.get_data()
-        current_filter = data.get("spec_filter")
-        filter_scope = data.get("filter_scope")
-        
-        await state.set_state(SpecialistFilterStates.main_menu)
-        
-        filter_info = ""
-        if current_filter:
-            filter_info = f"\n\n<b>Текущие настройки:</b>\n{format_filter_label(current_filter)}"
-        
-        scope_text = "по всем заявкам" if (is_super and filter_scope == "all") else "по вашим заявкам"
-        await callback.message.edit_text(
-            f"🔍 <b>Фильтр заявок</b>\n\n"
-            f"Фильтрация {scope_text}.\n"
-            f"Выберите параметры фильтрации:{filter_info}",
-            reply_markup=_build_advanced_filter_menu_keyboard(current_filter, filter_scope=filter_scope),
-            parse_mode="HTML",
-        )
-    await callback.answer()
+# Обработчики фильтров перенесены в app/handlers/specialist/filters/
+# Оставлены только обработчики, которые еще не перенесены
 
 
 @router.callback_query(F.data == "spec:flt:status")
 async def specialist_filter_status_menu(callback: CallbackQuery, state: FSMContext):
     """Меню выбора статусов."""
+    from app.handlers.specialist.filters.keyboards import build_status_selection_keyboard
+    
     data = await state.get_data()
     current_filter = data.get("spec_filter")
     selected_statuses = current_filter.get("statuses") if current_filter else None
@@ -744,7 +508,7 @@ async def specialist_filter_status_menu(callback: CallbackQuery, state: FSMConte
     await callback.message.edit_text(
         "📊 <b>Выбор статусов</b>\n\n"
         "Выберите один или несколько статусов. Можно выбрать несколько.",
-        reply_markup=_build_status_selection_keyboard(selected_statuses),
+        reply_markup=build_status_selection_keyboard(selected_statuses),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -785,10 +549,12 @@ async def specialist_filter_status_toggle(callback: CallbackQuery, state: FSMCon
     
     await state.update_data(spec_filter=current_filter)
     
+    from app.handlers.specialist.filters.keyboards import build_status_selection_keyboard
+    
     await callback.message.edit_text(
         "📊 <b>Выбор статусов</b>\n\n"
         "Выберите один или несколько статусов. Можно выбрать несколько.",
-        reply_markup=_build_status_selection_keyboard(selected_statuses),
+        reply_markup=build_status_selection_keyboard(selected_statuses),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -978,159 +744,11 @@ async def specialist_filter_date_input(message: Message, state: FSMContext):
     )
 
 
-def _clean_filter_payload(filter_payload: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Очищает фильтр от пустых значений и нормализует данные."""
-    logger.info(f"[FILTER CLEAN] Input filter_payload: {filter_payload}")
-    if not filter_payload:
-        logger.info("[FILTER CLEAN] filter_payload is None or empty, returning None")
-        return None
-    
-    cleaned = {}
-    
-    # Статусы
-    statuses = filter_payload.get("statuses")
-    if statuses and isinstance(statuses, list):
-        cleaned_statuses = [s for s in statuses if s]
-        if cleaned_statuses:
-            cleaned["statuses"] = cleaned_statuses
-    
-    # ID поля - проверяем что это валидное число > 0
-    for key in ["object_id", "engineer_id", "master_id", "contract_id", "defect_type_id"]:
-        value = filter_payload.get(key)
-        logger.info(f"[FILTER CLEAN] Processing {key}: {value} (type: {type(value)})")
-        # Проверяем что значение существует и не пустое
-        if value is not None:
-            # Если это строка, проверяем что она не пустая
-            if isinstance(value, str) and not value.strip():
-                logger.info(f"[FILTER CLEAN] Skipping {key}: empty string")
-                continue
-            # Если это число 0 или отрицательное, пропускаем
-            if isinstance(value, (int, float)) and value <= 0:
-                logger.info(f"[FILTER CLEAN] Skipping {key}: <= 0")
-                continue
-            try:
-                int_value = int(value)
-                if int_value > 0:
-                    logger.info(f"[FILTER CLEAN] Adding {key}: {int_value}")
-                    cleaned[key] = int_value
-                else:
-                    logger.warning(f"[FILTER CLEAN] Skipping {key}: converted to {int_value} <= 0")
-            except (ValueError, TypeError) as e:
-                logger.warning(f"[FILTER CLEAN] Failed to convert {key} to int: {value}, error: {e}")
-    
-    # Строковые поля - проверяем что не пустые
-    for key in ["address", "contact_person", "request_number"]:
-        value = filter_payload.get(key)
-        logger.info(f"[FILTER CLEAN] Processing string field {key}: {value}")
-        if value and str(value).strip():
-            cleaned_value = str(value).strip()
-            logger.info(f"[FILTER CLEAN] Adding {key}: '{cleaned_value}'")
-            cleaned[key] = cleaned_value
-        else:
-            logger.info(f"[FILTER CLEAN] Skipping {key}: empty or None")
-    
-    # Даты
-    date_mode = filter_payload.get("date_mode")
-    date_start = filter_payload.get("date_start")
-    date_end = filter_payload.get("date_end")
-    
-    if date_start or date_end:
-        cleaned["date_mode"] = date_mode or DateFilterMode.CREATED
-        if date_start and str(date_start).strip():
-            cleaned["date_start"] = str(date_start).strip()
-        if date_end and str(date_end).strip():
-            cleaned["date_end"] = str(date_end).strip()
-    
-    # Дополнительные поля для отображения
-    for key in ["object_name", "engineer_name", "master_name", "contract_number", "defect_type_name"]:
-        value = filter_payload.get(key)
-        if value:
-            logger.info(f"[FILTER CLEAN] Adding display field {key}: {value}")
-            cleaned[key] = value
-    
-    logger.info(f"[FILTER CLEAN] Final cleaned filter: {cleaned}")
-    result = cleaned if cleaned else None
-    logger.info(f"[FILTER CLEAN] Returning: {result}")
-    return result
+# Функция _clean_filter_payload перенесена в app/handlers/specialist/filters/utils.py
+# Используется через импорт выше
 
 
-@router.callback_query(F.data == "spec:flt:apply")
-async def specialist_filter_apply(callback: CallbackQuery, state: FSMContext):
-    """Применение фильтра."""
-    logger.info("[FILTER APPLY] Starting filter apply")
-    data = await state.get_data()
-    filter_payload = data.get("spec_filter")
-    logger.info(f"[FILTER APPLY] Raw filter_payload from state: {filter_payload}")
-    
-    # Проверяем, что есть хотя бы один параметр фильтра (до очистки)
-    if not filter_payload:
-        logger.warning("[FILTER APPLY] No filter_payload in state")
-        await callback.answer("Выберите хотя бы один параметр фильтрации.", show_alert=True)
-        return
-    
-    # Проверяем наличие хотя бы одного непустого параметра
-    has_filter = (
-        filter_payload.get("statuses")
-        or filter_payload.get("object_id")
-        or filter_payload.get("address")
-        or filter_payload.get("contact_person")
-        or filter_payload.get("engineer_id")
-        or filter_payload.get("master_id")
-        or filter_payload.get("request_number")
-        or filter_payload.get("contract_id")
-        or filter_payload.get("defect_type_id")
-        or filter_payload.get("date_start")
-        or filter_payload.get("date_end")
-    )
-    logger.info(f"[FILTER APPLY] has_filter check: {has_filter}")
-    
-    if not has_filter:
-        logger.warning("[FILTER APPLY] No valid filter parameters found")
-        await callback.answer("Выберите хотя бы один параметр фильтрации.", show_alert=True)
-        return
-    
-    # Очищаем фильтр от пустых значений, но сохраняем все валидные данные
-    cleaned_filter = _clean_filter_payload(filter_payload)
-    logger.info(f"[FILTER APPLY] Cleaned filter: {cleaned_filter}")
-    
-    # Если после очистки фильтр стал пустым, значит все значения были невалидными
-    if not cleaned_filter:
-        logger.warning("[FILTER APPLY] Cleaned filter is empty")
-        await callback.answer("Выберите хотя бы один валидный параметр фильтрации.", show_alert=True)
-        return
-    
-    # Сохраняем очищенный фильтр обратно в state
-    await state.update_data(spec_filter=cleaned_filter)
-    await state.set_state(None)
-    logger.info("[FILTER APPLY] Filter saved to state")
-    
-    async with async_session() as session:
-        specialist = await _get_specialist(session, callback.from_user.id)
-        if not specialist:
-            await callback.answer("Нет доступа.", show_alert=True)
-            return
-        
-        is_super = _is_super_admin(specialist)
-        data = await state.get_data()
-        filter_scope = data.get("filter_scope") if is_super else None
-        logger.info(f"[FILTER APPLY] Applying filter for specialist_id: {specialist.id}, is_super_admin: {is_super}, filter_scope: {filter_scope}")
-        try:
-            await _show_specialist_requests_list(
-                callback.message,
-                session,
-                specialist.id,
-                page=0,
-                context="filter",
-                filter_payload=cleaned_filter,
-                edit=True,
-                is_super_admin=is_super,
-                filter_scope=filter_scope,
-            )
-            logger.info("[FILTER APPLY] Filter applied successfully")
-            await callback.answer("Фильтр применён.")
-        except Exception as e:
-            logger.error(f"[FILTER APPLY] Error applying filter: {e}", exc_info=True)
-            await callback.answer(f"Ошибка при применении фильтра: {str(e)}", show_alert=True)
+# Обработчик specialist_filter_apply перенесен в app/handlers/specialist/filters/
 
 
 @router.callback_query(F.data == "spec:flt:address")
@@ -3245,226 +2863,16 @@ def _build_request_summary(data: dict) -> str:
         "Нажмите кнопку ниже для подтверждения или отмены создания заявки."
     )
 
-def _specialist_filter_conditions(filter_payload: dict[str, Any] | None) -> list:
-    """Строит условия фильтрации для заявок специалиста."""
-    logger.info(f"[SPECIALIST FILTER] Building conditions for filter_payload: {filter_payload}")
-    if not filter_payload:
-        logger.info("[SPECIALIST FILTER] No filter_payload, returning empty conditions")
-        return []
-    
-    # Поддержка старого формата фильтра для обратной совместимости
-    if "mode" in filter_payload:
-        logger.info("[SPECIALIST FILTER] Using legacy filter format")
-        mode = (filter_payload.get("mode") or "").strip().lower()
-        value = (filter_payload.get("value") or "").strip()
-        conditions: list = []
-        if mode == "адрес" and value:
-            conditions.append(func.lower(Request.address).like(f"%{value.lower()}%"))
-        elif mode == "дата":
-            start = filter_payload.get("start")
-            end = filter_payload.get("end")
-            if start and end:
-                try:
-                    start_dt = datetime.fromisoformat(start)
-                    end_dt = datetime.fromisoformat(end)
-                    conditions.append(Request.created_at.between(start_dt, end_dt))
-                except ValueError:
-                    pass
-        logger.info(f"[SPECIALIST FILTER] Legacy conditions: {conditions}")
-        return conditions
-    
-    # Новый формат фильтра
-    logger.info("[SPECIALIST FILTER] Using new filter format")
-    conditions = build_filter_conditions(filter_payload)
-    logger.info(f"[SPECIALIST FILTER] Final conditions: {conditions}")
-    return conditions
+# Функции _specialist_filter_conditions и _specialist_filter_label перенесены в app/handlers/specialist/filters/utils.py
+# Используются через импорты выше
 
 
-def _specialist_filter_label(filter_payload: dict[str, Any] | None) -> str:
-    """Форматирует описание фильтра для отображения."""
-    if not filter_payload:
-        return ""
-    
-    # Поддержка старого формата фильтра для обратной совместимости
-    if "mode" in filter_payload:
-        mode = (filter_payload.get("mode") or "").strip().lower()
-        if mode == "адрес":
-            value = (filter_payload.get("value") or "").strip()
-            return f"адрес: {value}" if value else ""
-        if mode == "дата":
-            start = filter_payload.get("start")
-            end = filter_payload.get("end")
-            if start and end:
-                try:
-                    start_dt = datetime.fromisoformat(start)
-                    end_dt = datetime.fromisoformat(end)
-                    return f"дата: {format_date_range_label(start_dt, end_dt)}"
-                except ValueError:
-                    return ""
-        return ""
-    
-    # Новый формат фильтра
-    return format_filter_label(filter_payload)
+# Функции клавиатур перенесены в app/handlers/specialist/filters/keyboards.py
+# Используются через импорты выше
 
 
-def _build_advanced_filter_menu_keyboard(current_filter: dict[str, Any] | None = None, filter_scope: str | None = None) -> InlineKeyboardMarkup:
-    """Строит главное меню расширенного фильтра согласно дизайну."""
-    builder = InlineKeyboardBuilder()
-    
-    # Для суперадминов добавляем кнопку переключения области фильтрации в начале
-    if filter_scope is not None:
-        scope_text = "🌐 Все заявки" if filter_scope == "all" else "📋 Только мои заявки"
-        scope_callback = "spec:flt:scope:mine" if filter_scope == "all" else "spec:flt:scope:all"
-        builder.button(text=scope_text, callback_data=scope_callback)
-        builder.adjust(1)  # Кнопка области фильтрации в отдельной строке
-    
-    # Первая строка: По адресу, по контакту, По ЖК
-    address_text = "🏠 По адресу"
-    if current_filter and current_filter.get("address"):
-        address_text += " ✓"
-    builder.button(text=address_text, callback_data="spec:flt:address")
-    
-    contact_text = "👤 По контакту"
-    if current_filter and current_filter.get("contact_person"):
-        contact_text += " ✓"
-    builder.button(text=contact_text, callback_data="spec:flt:contact")
-    
-    object_text = "🏢 По ЖК"
-    if current_filter and current_filter.get("object_id"):
-        object_name = current_filter.get("object_name", "")
-        if object_name:
-            object_text += f" ✓"
-        else:
-            object_text += " ✓"
-    builder.button(text=object_text, callback_data="spec:flt:object")
-    
-    # Вторая строка: По инженеру, Период времени, По статусу
-    engineer_text = "🔧 По инженеру"
-    if current_filter and current_filter.get("engineer_id"):
-        engineer_text += " ✓"
-    builder.button(text=engineer_text, callback_data="spec:flt:engineer")
-    
-    period_text = "📅 Период времени"
-    if current_filter and (current_filter.get("date_start") or current_filter.get("date_end")):
-        period_text += " ✓"
-    builder.button(text=period_text, callback_data="spec:flt:date")
-    
-    status_text = "📊 По статусу"
-    if current_filter and current_filter.get("statuses"):
-        status_count = len(current_filter["statuses"])
-        status_text += f" ({status_count})"
-    builder.button(text=status_text, callback_data="spec:flt:status")
-    
-    # Третья строка: По мастеру, Номер заявки, По договору
-    master_text = "👷 По мастеру"
-    if current_filter and current_filter.get("master_id"):
-        master_text += " ✓"
-    builder.button(text=master_text, callback_data="spec:flt:master")
-    
-    number_text = "🔢 Номер заявки"
-    if current_filter and current_filter.get("request_number"):
-        number_text += " ✓"
-    builder.button(text=number_text, callback_data="spec:flt:number")
-    
-    contract_text = "📄 По договору"
-    if current_filter and current_filter.get("contract_id"):
-        contract_text += " ✓"
-    builder.button(text=contract_text, callback_data="spec:flt:contract")
-    
-    # Четвертая строка: По дефектам
-    defect_text = "⚠️ По дефектам"
-    if current_filter and current_filter.get("defect_type_id"):
-        defect_text += " ✓"
-    builder.button(text=defect_text, callback_data="spec:flt:defect")
-    
-    # Кнопки управления
-    builder.button(text="✅ Применить", callback_data="spec:flt:apply")
-    builder.button(text="♻️ Сбросить", callback_data="spec:flt:clear")
-    builder.button(text="✖️ Отмена", callback_data="spec:flt:cancel")
-    
-    # Располагаем кнопки по 3 в ряд (как в дизайне)
-    builder.adjust(3, 3, 3, 1, 1, 1)
-    return builder.as_markup()
-
-
-def _build_status_selection_keyboard(selected_statuses: list[str] | None = None) -> InlineKeyboardMarkup:
-    """Строит клавиатуру для выбора статусов."""
-    builder = InlineKeyboardBuilder()
-    
-    # Статусы из ТЗ
-    status_options = [
-        ("Новая", "new"),
-        ("Принята в работу", "assigned"),
-        ("Приступили к выполнению", "in_progress"),
-        ("Выполнена", "completed"),
-        ("Отмена", "cancelled"),
-    ]
-    
-    selected_set = set(selected_statuses or [])
-    
-    for display_name, status_key in status_options:
-        prefix = "✅ " if display_name in selected_set else "☐ "
-        builder.button(
-            text=f"{prefix}{display_name}",
-            callback_data=f"spec:flt:status_toggle:{status_key}"
-        )
-    
-    builder.button(text="⬅️ Назад", callback_data="spec:flt:back")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
-def _build_object_selection_keyboard(objects: list[Object], selected_object_id: int | None = None) -> InlineKeyboardMarkup:
-    """Строит клавиатуру для выбора объекта."""
-    builder = InlineKeyboardBuilder()
-    
-    for obj in objects:
-        prefix = "✅ " if selected_object_id and obj.id == selected_object_id else ""
-        builder.button(
-            text=f"{prefix}{obj.name}",
-            callback_data=f"spec:flt:object_select:{obj.id}"
-        )
-    
-    if selected_object_id:
-        builder.button(text="❌ Убрать объект", callback_data="spec:flt:object_remove")
-    
-    builder.button(text="⬅️ Назад", callback_data="spec:flt:back")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
-def _build_date_mode_keyboard() -> InlineKeyboardMarkup:
-    """Строит клавиатуру для выбора режима фильтрации по дате."""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="📅 По дате создания", callback_data="spec:flt:date_mode:created")
-    builder.button(text="📋 По плановой дате", callback_data="spec:flt:date_mode:planned")
-    builder.button(text="✅ По дате выполнения", callback_data="spec:flt:date_mode:completed")
-    builder.button(text="⬅️ Назад", callback_data="spec:flt:back")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
-def _specialist_filter_menu_keyboard() -> InlineKeyboardMarkup:
-    """Старое меню фильтра (для обратной совместимости)."""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🏠 По адресу", callback_data="spec:flt:mode:address")
-    builder.button(text="📅 По дате", callback_data="spec:flt:mode:date")
-    builder.button(text="🗓 Сегодня", callback_data="spec:flt:quick:today")
-    builder.button(text="7 дней", callback_data="spec:flt:quick:7d")
-    builder.button(text="30 дней", callback_data="spec:flt:quick:30d")
-    builder.button(text="Этот месяц", callback_data="spec:flt:quick:this_month")
-    builder.button(text="Прошлый месяц", callback_data="spec:flt:quick:prev_month")
-    builder.button(text="♻️ Сбросить фильтр", callback_data="spec:flt:clear")
-    builder.button(text="✖️ Отмена", callback_data="spec:flt:cancel")
-    builder.adjust(2)
-    return builder.as_markup()
-
-
-def _specialist_filter_cancel_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="✖️ Отмена", callback_data="spec:flt:cancel")
-    builder.adjust(1)
-    return builder.as_markup()
+# Функции клавиатур перенесены в app/handlers/specialist/filters/keyboards.py
+# Используются через импорты выше
 
 
 async def _fetch_specialist_requests_page(
