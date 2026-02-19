@@ -475,8 +475,8 @@ async def specialist_requests(message: Message, state: FSMContext):
             return
 
         is_super = _is_super_admin(specialist)
-        data = await state.get_data()
-        filter_scope = data.get("filter_scope") if is_super else None
+        # Для "Мои заявки" всегда показываем только свои: специалист — по specialist_id, суперадмин — по engineer_id
+        filter_scope = None
         await _show_specialist_requests_list(message, session, specialist.id, page=0, is_super_admin=is_super, filter_scope=filter_scope)
 
 
@@ -495,9 +495,8 @@ async def specialist_requests_page(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Нет доступа.", show_alert=True)
             return
         is_super = _is_super_admin(specialist)
-        data = await state.get_data()
-        filter_scope = data.get("filter_scope") if is_super else None
-        # Убеждаемся, что фильтр не применяется
+        # Для "Мои заявки" всегда только свои: специалист — specialist_id, суперадмин — engineer_id
+        filter_scope = None
         await _show_specialist_requests_list(
             callback.message,
             session,
@@ -667,7 +666,6 @@ async def specialist_filter_quick(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "spec:flt:clear")
 async def specialist_filter_clear(callback: CallbackQuery, state: FSMContext):
     await state.update_data(spec_filter=None)
-    # Для суперадминов не сбрасываем filter_scope при очистке фильтра
     await state.set_state(None)
     async with async_session() as session:
         specialist = await _get_specialist(session, callback.from_user.id)
@@ -675,8 +673,8 @@ async def specialist_filter_clear(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Нет доступа.", show_alert=True)
             return
         is_super = _is_super_admin(specialist)
-        data = await state.get_data()
-        filter_scope = data.get("filter_scope") if is_super else None
+        # При возврате к списку показываем "Мои заявки": специалист — specialist_id, суперадмин — engineer_id
+        filter_scope = None
         await _show_specialist_requests_list(
             callback.message,
             session,
@@ -3541,17 +3539,17 @@ async def _fetch_specialist_requests_page(
     logger.info(f"[FETCH REQUESTS] Fetching page {page} for specialist_id {specialist_id}, is_super_admin: {is_super_admin}, filter_scope: {filter_scope}")
     logger.info(f"[FETCH REQUESTS] filter_payload: {filter_payload}")
     
-    # Определяем, нужно ли ограничивать по specialist_id
-    # Для суперадмина: если filter_scope == "all", показываем все заявки; если "mine" - только свои
-    # Для обычного специалиста: всегда только свои заявки
+    # Определяем, нужно ли ограничивать по specialist_id или engineer_id
+    # Для суперадмина: если filter_scope == "all", показываем все заявки; если "mine" - только заявки, где он инженер
+    # Для обычного специалиста: всегда только свои заявки (specialist_id)
     base_conditions = []
     if is_super_admin:
         if filter_scope == "all":
-            logger.info(f"[FETCH REQUESTS] Super admin mode - showing ALL requests (no specialist_id filter)")
+            logger.info(f"[FETCH REQUESTS] Super admin mode - showing ALL requests (no filter)")
         else:
-            # По умолчанию для суперадмина показываем только свои, если не указано иное
-            base_conditions.append(Request.specialist_id == specialist_id)
-            logger.info(f"[FETCH REQUESTS] Super admin mode - showing OWN requests (specialist_id: {specialist_id})")
+            # Для суперадмина "Мои заявки" = заявки, где он назначен инженером
+            base_conditions.append(Request.engineer_id == specialist_id)
+            logger.info(f"[FETCH REQUESTS] Super admin mode - showing OWN requests as engineer (engineer_id: {specialist_id})")
     else:
         base_conditions.append(Request.specialist_id == specialist_id)
         logger.info(f"[FETCH REQUESTS] Regular specialist - adding specialist_id filter: {specialist_id}")

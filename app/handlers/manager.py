@@ -672,18 +672,22 @@ async def manager_reports(message: Message):
 @router.message(F.text == "📋 Мои заявки")
 async def manager_my_requests(message: Message):
     """Обработчик для просмотра заявок суперадмина (использует функции специалиста)."""
-    from app.handlers.specialist import _get_specialist, _show_specialist_requests_list
+    from app.handlers.specialist import _get_specialist, _is_super_admin, _show_specialist_requests_list
     
     async with async_session() as session:
         specialist_or_admin = await _get_specialist(session, message.from_user.id)
         if not specialist_or_admin:
             await message.answer("Эта функция доступна только специалистам отдела и суперадминам.")
             return
+        is_super = _is_super_admin(specialist_or_admin)
+        # Для суперадмина "Мои заявки" = заявки, где он инженер; filter_scope=None
         await _show_specialist_requests_list(
             message,
             session,
             specialist_or_admin.id,
             page=0,
+            is_super_admin=is_super,
+            filter_scope=None,
         )
 
 
