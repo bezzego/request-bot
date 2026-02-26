@@ -126,7 +126,8 @@ def _manager_filter_menu_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="Прошлый месяц", callback_data="manager:flt:quick:prev_month")
     builder.button(text="♻️ Сбросить фильтр", callback_data="manager:flt:clear")
     builder.button(text="✖️ Отмена", callback_data="manager:flt:cancel")
-    builder.adjust(2)
+    # Кнопки фильтра показываем столбиком, чтобы длинные подписи не обрезались
+    builder.adjust(1)
     return builder.as_markup()
 
 

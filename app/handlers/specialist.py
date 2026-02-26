@@ -3380,7 +3380,6 @@ def _build_advanced_filter_menu_keyboard(current_filter: dict[str, Any] | None =
         scope_text = "🌐 Все заявки" if filter_scope == "all" else "📋 Только мои заявки"
         scope_callback = "spec:flt:scope:mine" if filter_scope == "all" else "spec:flt:scope:all"
         builder.button(text=scope_text, callback_data=scope_callback)
-        builder.adjust(1)  # Кнопка области фильтрации в отдельной строке
     
     # Первая строка: По адресу, по контакту, По ЖК
     address_text = "🏠 По адресу"
@@ -3445,6 +3444,9 @@ def _build_advanced_filter_menu_keyboard(current_filter: dict[str, Any] | None =
     builder.button(text="✅ Применить", callback_data="spec:flt:apply")
     builder.button(text="♻️ Сбросить", callback_data="spec:flt:clear")
     builder.button(text="✖️ Отмена", callback_data="spec:flt:cancel")
+
+    # Все кнопки фильтра показываем столбиком, чтобы текст не обрезался
+    builder.adjust(1)
     
     # Располагаем кнопки по 3 в ряд (как в дизайне)
     builder.adjust(3, 3, 3, 1, 1, 1)
