@@ -759,6 +759,7 @@ async def specialist_filter_status_toggle(callback: CallbackQuery, state: FSMCon
         "assigned": "Принята в работу",
         "in_progress": "Приступили к выполнению",
         "completed": "Выполнена",
+        "ready_for_sign": "Ожидает подписания",
         "cancelled": "Отмена",
     }
     
@@ -3460,6 +3461,7 @@ def _build_status_selection_keyboard(selected_statuses: list[str] | None = None)
         ("Принята в работу", "assigned"),
         ("Приступили к выполнению", "in_progress"),
         ("Выполнена", "completed"),
+        ("Ожидает подписания", "ready_for_sign"),
         ("Отмена", "cancelled"),
     ]
     
