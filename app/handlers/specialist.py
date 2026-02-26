@@ -1970,6 +1970,8 @@ async def specialist_request_detail(callback: CallbackQuery, state: FSMContext):
     )
     builder.button(text="⬅️ Назад к списку", callback_data=back_callback)
     builder.button(text="🔄 Обновить", callback_data=refresh_callback)
+    # Раскладываем все кнопки в один столбик, чтобы они не обрезались по ширине
+    builder.adjust(1)
     
     # Сохраняем контекст фильтра в state для восстановления при возврате
     if context == "filter":

@@ -572,11 +572,7 @@ class RequestService:
                 f"Заявка должна быть в статусе «Работы завершены» или «Ожидает подписания», "
                 f"текущий статус: {get_request_status_title(request.status)}"
             )
-        
-        # Проверяем, что инженер провёл осмотр
-        if not request.inspection_completed_at:
-            reasons.append("Осмотр должен быть завершён инженером")
-        
+
         return len(reasons) == 0, reasons
 
     @staticmethod
