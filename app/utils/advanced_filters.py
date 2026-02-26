@@ -22,6 +22,7 @@ STATUS_MAPPING: dict[str, RequestStatus] = {
     "Принята в работу": RequestStatus.ASSIGNED,
     "Приступили к выполнению": RequestStatus.IN_PROGRESS,
     "Выполнена": RequestStatus.COMPLETED,
+    "Ожидает подписания": RequestStatus.READY_FOR_SIGN,
     "Отмена": RequestStatus.CANCELLED,
     # "Не доступ" и "Не гарантия" - это варианты отмены, используют CANCELLED
     "Не доступ": RequestStatus.CANCELLED,
