@@ -244,7 +244,7 @@ async def _show_engineer_requests_list(
             f"eng:detail:{req.id}:f:{page}" if context == "filter" else f"eng:detail:{req.id}:{page}"
         )
         label = format_request_label(req)
-        list_lines.append(f"{idx}. {html.escape(label)} · {status_text}")
+        list_lines.append(f"{idx}. {html.escape(label)}\n<b>{html.escape(status_text)}</b>")
         builder.button(
             text=f"{idx}. {label} · {status_text}",
             callback_data=detail_cb,
@@ -280,7 +280,7 @@ async def _show_engineer_requests_list(
             header = f"{header}\n\n<b>Фильтр:</b>\n{html.escape(label)}"
     else:
         header = "Выберите заявку, чтобы управлять этапами и бюджетом."
-    requests_list = "\n".join(list_lines)
+    requests_list = "\n\n".join(list_lines)
     footer = f"\n\nСтраница {page + 1}/{total_pages} · Всего: {total}"
     text = f"{header}\n\n{requests_list}{footer}"
 

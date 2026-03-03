@@ -212,7 +212,7 @@ async def _show_manager_requests_list(
         )
         label = format_request_label(req)
         status_title = get_request_status_title(req.status)
-        list_lines.append(f"{idx}. {status_emoji} {html.escape(label)} · {status_title}")
+        list_lines.append(f"{idx}. {status_emoji} {html.escape(label)}\n<b>{html.escape(status_title)}</b>")
         builder.button(
             text=f"{idx}. {status_emoji} {label} · {status_title}",
             callback_data=detail_cb,
@@ -248,7 +248,7 @@ async def _show_manager_requests_list(
             header = f"{header}\n\n<b>Фильтр:</b>\n{html.escape(label)}"
     else:
         header = "📋 <b>Все заявки</b>\n\nВыберите заявку, чтобы посмотреть подробности и закрыть её."
-    requests_list = "\n".join(list_lines)
+    requests_list = "\n\n".join(list_lines)
     footer = f"\n\nСтраница {page + 1}/{total_pages} · Всего: {total}"
     text = f"{header}\n\n{requests_list}{footer}"
 

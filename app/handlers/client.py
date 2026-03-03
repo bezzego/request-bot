@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import html
+
 from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
@@ -84,7 +86,7 @@ async def _show_client_requests_list(
     for idx, req in enumerate(requests, start=start_index + 1):
         status = STATUS_TITLES.get(req.status, req.status.value)
         label = format_request_label(req)
-        list_lines.append(f"{idx}. {label} · {status}")
+        list_lines.append(f"{idx}. {html.escape(label)}\n<b>{html.escape(status)}</b>")
         builder.button(
             text=f"{idx}. {label} · {status}",
             callback_data=f"client:detail:{req.id}:{page}",
@@ -100,7 +102,7 @@ async def _show_client_requests_list(
             nav.append(InlineKeyboardButton(text="➡️", callback_data=f"client:list:{page + 1}"))
         builder.row(*nav)
 
-    requests_list = "\n".join(list_lines)
+    requests_list = "\n\n".join(list_lines)
     text = (
         "Выберите заявку, чтобы посмотреть статус и сроки."
         f"\n\n{requests_list}"
@@ -108,9 +110,9 @@ async def _show_client_requests_list(
     )
 
     if edit:
-        await message.edit_text(text, reply_markup=builder.as_markup())
+        await message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
     else:
-        await message.answer(text, reply_markup=builder.as_markup())
+        await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
 
 async def _show_client_feedback_list(
@@ -145,7 +147,7 @@ async def _show_client_feedback_list(
     list_lines = []
     for idx, req in enumerate(requests, start=start_index + 1):
         label = format_request_label(req)
-        list_lines.append(f"{idx}. {label} · {req.title}")
+        list_lines.append(f"{idx}. {html.escape(label)}\n<b>{html.escape(req.title or '')}</b>")
         builder.button(
             text=f"{idx}. {label} · {req.title}",
             callback_data=f"client:feedback:{req.id}:{page}",
@@ -161,7 +163,7 @@ async def _show_client_feedback_list(
             nav.append(InlineKeyboardButton(text="➡️", callback_data=f"client:feedback_list:{page + 1}"))
         builder.row(*nav)
 
-    requests_list = "\n".join(list_lines)
+    requests_list = "\n\n".join(list_lines)
     text = (
         "Выберите заявку, чтобы оставить отзыв о качестве работ."
         f"\n\n{requests_list}"
@@ -169,9 +171,9 @@ async def _show_client_feedback_list(
     )
 
     if edit:
-        await message.edit_text(text, reply_markup=builder.as_markup())
+        await message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
     else:
-        await message.answer(text, reply_markup=builder.as_markup())
+        await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
 
 @router.message(F.text == "📋 Мои заявки")

@@ -3649,7 +3649,7 @@ async def _show_specialist_requests_list(
         else:
             detail_cb = f"spec:detail:{req.id}:{page}"
         label = format_request_label(req)
-        list_lines.append(f"{idx}. {html.escape(label)} · {status}")
+        list_lines.append(f"{idx}. {html.escape(label)}\n<b>{html.escape(status)}</b>")
         builder.button(
             text=f"{idx}. {label} · {status}",
             callback_data=detail_cb,
@@ -3685,7 +3685,7 @@ async def _show_specialist_requests_list(
             header = f"{header}\n\n<b>Фильтр:</b>\n{html.escape(label)}"
     else:
         header = "Выберите заявку, чтобы посмотреть подробности и актуальный статус."
-    requests_list = "\n".join(list_lines)
+    requests_list = "\n\n".join(list_lines)
     footer = f"\n\nСтраница {page + 1}/{total_pages} · Всего: {total}"
     text = f"{header}\n\n{requests_list}{footer}"
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 from dataclasses import dataclass
 
@@ -118,7 +119,7 @@ async def _show_master_requests_list(
     for idx, req in enumerate(requests, start=start_index + 1):
         label = format_request_label(req)
         status_title = STATUS_TITLES.get(req.status, req.status.value)
-        list_lines.append(f"{idx}. {label} · {status_title}")
+        list_lines.append(f"{idx}. {html.escape(label)}\n<b>{html.escape(status_title)}</b>")
         builder.button(
             text=f"{idx}. {label} · {status_title}",
             callback_data=f"master:detail:{req.id}:{page}",
@@ -134,7 +135,7 @@ async def _show_master_requests_list(
             nav.append(InlineKeyboardButton(text="➡️", callback_data=f"master:list:{page + 1}"))
         builder.row(*nav)
 
-    requests_list = "\n".join(list_lines)
+    requests_list = "\n\n".join(list_lines)
     text = (
         "Выберите заявку, чтобы зафиксировать работу и фотоотчёт."
         f"\n\n{requests_list}"
@@ -142,9 +143,9 @@ async def _show_master_requests_list(
     )
 
     if edit:
-        await message.edit_text(text, reply_markup=builder.as_markup())
+        await message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
     else:
-        await message.answer(text, reply_markup=builder.as_markup())
+        await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
 
 @router.message(F.text == "📥 Мои заявки")
