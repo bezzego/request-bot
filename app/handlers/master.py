@@ -114,9 +114,13 @@ async def _show_master_requests_list(
 
     builder = InlineKeyboardBuilder()
     start_index = page * REQUESTS_PAGE_SIZE
+    list_lines = []
     for idx, req in enumerate(requests, start=start_index + 1):
+        label = format_request_label(req)
+        status_title = STATUS_TITLES.get(req.status, req.status.value)
+        list_lines.append(f"{idx}. {label} · {status_title}")
         builder.button(
-            text=f"{idx}. {format_request_label(req)} · {STATUS_TITLES.get(req.status, req.status.value)}",
+            text=f"{idx}. {label} · {status_title}",
             callback_data=f"master:detail:{req.id}:{page}",
         )
     builder.adjust(1)
@@ -130,8 +134,10 @@ async def _show_master_requests_list(
             nav.append(InlineKeyboardButton(text="➡️", callback_data=f"master:list:{page + 1}"))
         builder.row(*nav)
 
+    requests_list = "\n".join(list_lines)
     text = (
         "Выберите заявку, чтобы зафиксировать работу и фотоотчёт."
+        f"\n\n{requests_list}"
         f"\n\nСтраница {page + 1}/{total_pages} · Всего: {total}"
     )
 

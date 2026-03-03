@@ -80,10 +80,13 @@ async def _show_client_requests_list(
 
     builder = InlineKeyboardBuilder()
     start_index = page * REQUESTS_PAGE_SIZE
+    list_lines = []
     for idx, req in enumerate(requests, start=start_index + 1):
         status = STATUS_TITLES.get(req.status, req.status.value)
+        label = format_request_label(req)
+        list_lines.append(f"{idx}. {label} · {status}")
         builder.button(
-            text=f"{idx}. {format_request_label(req)} · {status}",
+            text=f"{idx}. {label} · {status}",
             callback_data=f"client:detail:{req.id}:{page}",
         )
     builder.adjust(1)
@@ -97,8 +100,10 @@ async def _show_client_requests_list(
             nav.append(InlineKeyboardButton(text="➡️", callback_data=f"client:list:{page + 1}"))
         builder.row(*nav)
 
+    requests_list = "\n".join(list_lines)
     text = (
         "Выберите заявку, чтобы посмотреть статус и сроки."
+        f"\n\n{requests_list}"
         f"\n\nСтраница {page + 1}/{total_pages} · Всего: {total}"
     )
 
@@ -137,9 +142,12 @@ async def _show_client_feedback_list(
 
     builder = InlineKeyboardBuilder()
     start_index = page * REQUESTS_PAGE_SIZE
+    list_lines = []
     for idx, req in enumerate(requests, start=start_index + 1):
+        label = format_request_label(req)
+        list_lines.append(f"{idx}. {label} · {req.title}")
         builder.button(
-            text=f"{idx}. {format_request_label(req)} · {req.title}",
+            text=f"{idx}. {label} · {req.title}",
             callback_data=f"client:feedback:{req.id}:{page}",
         )
     builder.adjust(1)
@@ -153,8 +161,10 @@ async def _show_client_feedback_list(
             nav.append(InlineKeyboardButton(text="➡️", callback_data=f"client:feedback_list:{page + 1}"))
         builder.row(*nav)
 
+    requests_list = "\n".join(list_lines)
     text = (
         "Выберите заявку, чтобы оставить отзыв о качестве работ."
+        f"\n\n{requests_list}"
         f"\n\nСтраница {page + 1}/{total_pages} · Всего: {total}"
     )
 

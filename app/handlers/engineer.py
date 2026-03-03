@@ -237,13 +237,16 @@ async def _show_engineer_requests_list(
     builder = InlineKeyboardBuilder()
     ctx_key = "filter" if context == "filter" else "list"
     start_index = page * REQUESTS_PAGE_SIZE
+    list_lines = []
     for idx, req in enumerate(requests, start=start_index + 1):
         status_text = STATUS_TITLES.get(req.status, req.status.value)
         detail_cb = (
             f"eng:detail:{req.id}:f:{page}" if context == "filter" else f"eng:detail:{req.id}:{page}"
         )
+        label = format_request_label(req)
+        list_lines.append(f"{idx}. {html.escape(label)} · {status_text}")
         builder.button(
-            text=f"{idx}. {format_request_label(req)} · {status_text}",
+            text=f"{idx}. {label} · {status_text}",
             callback_data=detail_cb,
         )
         # Под кнопкой заявки — корзинка удаления (безвозвратно из БД)
@@ -277,8 +280,9 @@ async def _show_engineer_requests_list(
             header = f"{header}\n\n<b>Фильтр:</b>\n{html.escape(label)}"
     else:
         header = "Выберите заявку, чтобы управлять этапами и бюджетом."
+    requests_list = "\n".join(list_lines)
     footer = f"\n\nСтраница {page + 1}/{total_pages} · Всего: {total}"
-    text = f"{header}{footer}"
+    text = f"{header}\n\n{requests_list}{footer}"
 
     if edit:
         await message.edit_text(text, reply_markup=builder.as_markup())

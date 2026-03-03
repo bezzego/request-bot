@@ -196,6 +196,7 @@ async def _show_manager_requests_list(
     builder = InlineKeyboardBuilder()
     ctx_key = "filter" if context == "filter" else "all"
     start_index = page * REQUESTS_PAGE_SIZE
+    list_lines = []
     for idx, req in enumerate(requests, start=start_index + 1):
         status_emoji = (
             "✅"
@@ -209,8 +210,11 @@ async def _show_manager_requests_list(
             if context == "filter"
             else f"manager:detail:{req.id}:all:{page}"
         )
+        label = format_request_label(req)
+        status_title = get_request_status_title(req.status)
+        list_lines.append(f"{idx}. {status_emoji} {html.escape(label)} · {status_title}")
         builder.button(
-            text=f"{idx}. {status_emoji} {format_request_label(req)} · {get_request_status_title(req.status)}",
+            text=f"{idx}. {status_emoji} {label} · {status_title}",
             callback_data=detail_cb,
         )
         # Под кнопкой заявки — корзинка удаления (безвозвратно из БД)
@@ -244,8 +248,9 @@ async def _show_manager_requests_list(
             header = f"{header}\n\n<b>Фильтр:</b>\n{html.escape(label)}"
     else:
         header = "📋 <b>Все заявки</b>\n\nВыберите заявку, чтобы посмотреть подробности и закрыть её."
+    requests_list = "\n".join(list_lines)
     footer = f"\n\nСтраница {page + 1}/{total_pages} · Всего: {total}"
-    text = f"{header}{footer}"
+    text = f"{header}\n\n{requests_list}{footer}"
 
     if edit:
         await message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
