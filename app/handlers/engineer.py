@@ -31,8 +31,12 @@ from app.handlers.common.work_fact_view import (
     format_quantity_message,
 )
 from app.infrastructure.db.models import (
+    Act,
     ActType,
+    Contract,
+    DefectType,
     Leader,
+    Object,
     Photo,
     PhotoType,
     Request,
@@ -59,7 +63,12 @@ from typing import Any
 
 router = Router()
 ENGINEER_CALENDAR_PREFIX = "eng_schedule"
+ENG_CREATE_CALENDAR_PREFIX = "eng_create_insp"
 REQUESTS_PAGE_SIZE = 10
+_ENG_OBJ_PAGE_SIZE = 12
+_ENG_ADDR_PAGE_SIZE = 12
+_ENG_CONTRACT_PAGE_SIZE = 12
+_ENG_DEFECT_PAGE_SIZE = 12
 
 logger = logging.getLogger(__name__)
 
@@ -79,11 +88,18 @@ class EngineerStates(StatesGroup):
 
 class EngineerCreateStates(StatesGroup):
     title = State()
+    description = State()
     object_name = State()
     address = State()
     apartment = State()
-    description = State()
-    phone = State()
+    contact_person = State()
+    contact_phone = State()
+    contract_number = State()
+    defect_type = State()
+    inspection_datetime = State()
+    inspection_time = State()
+    inspection_location = State()
+    letter = State()
     confirmation = State()
 
 
@@ -290,6 +306,166 @@ async def _show_engineer_requests_list(
         await message.answer(text, reply_markup=builder.as_markup())
 
 
+# ──────────────────────────────────────────────────────────────────
+# Вспомогательные функции для создания заявки (аналог specialist.py)
+# ──────────────────────────────────────────────────────────────────
+
+
+async def _eng_get_objects_page(session, page: int = 0) -> tuple[list[Object], int, int]:
+    total = int(await session.scalar(select(func.count()).select_from(Object)) or 0)
+    total_pages = max(1, (total + _ENG_OBJ_PAGE_SIZE - 1) // _ENG_OBJ_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    items = (
+        await session.execute(
+            select(Object).order_by(Object.name.asc()).limit(_ENG_OBJ_PAGE_SIZE).offset(page * _ENG_OBJ_PAGE_SIZE)
+        )
+    ).scalars().all()
+    return list(items), page, total_pages
+
+
+async def _eng_get_addresses_page(session, object_name: str | None = None, page: int = 0) -> tuple[list[str], int, int]:
+    if object_name:
+        name_normalized = object_name.strip().lower()
+        base_query = (
+            select(Request.address)
+            .join(Object, Request.object_id == Object.id)
+            .where(Request.address.isnot(None), func.lower(Object.name) == name_normalized)
+        )
+    else:
+        base_query = select(Request.address).where(Request.address.isnot(None))
+    count_sq = base_query.group_by(Request.address).subquery()
+    total = int(await session.scalar(select(func.count()).select_from(count_sq)) or 0)
+    total_pages = max(1, (total + _ENG_ADDR_PAGE_SIZE - 1) // _ENG_ADDR_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    rows = await session.execute(
+        base_query.group_by(Request.address)
+        .order_by(func.max(Request.created_at).desc())
+        .limit(_ENG_ADDR_PAGE_SIZE)
+        .offset(page * _ENG_ADDR_PAGE_SIZE)
+    )
+    return [r[0] for r in rows.all() if r[0]], page, total_pages
+
+
+async def _eng_get_contracts_page(session, page: int = 0) -> tuple[list[Contract], int, int]:
+    total = int(await session.scalar(select(func.count()).select_from(Contract)) or 0)
+    total_pages = max(1, (total + _ENG_CONTRACT_PAGE_SIZE - 1) // _ENG_CONTRACT_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    items = (
+        await session.execute(
+            select(Contract).order_by(Contract.number.asc()).limit(_ENG_CONTRACT_PAGE_SIZE).offset(page * _ENG_CONTRACT_PAGE_SIZE)
+        )
+    ).scalars().all()
+    return list(items), page, total_pages
+
+
+async def _eng_get_defect_types_page(session, page: int = 0) -> tuple[list[DefectType], int, int]:
+    total = int(await session.scalar(select(func.count()).select_from(DefectType)) or 0)
+    total_pages = max(1, (total + _ENG_DEFECT_PAGE_SIZE - 1) // _ENG_DEFECT_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    items = (
+        await session.execute(
+            select(DefectType).order_by(DefectType.name.asc()).limit(_ENG_DEFECT_PAGE_SIZE).offset(page * _ENG_DEFECT_PAGE_SIZE)
+        )
+    ).scalars().all()
+    return list(items), page, total_pages
+
+
+def _eng_object_keyboard(objects: list[Object], page: int, total_pages: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for obj in objects:
+        name = obj.name[:40] + "…" if len(obj.name) > 40 else obj.name
+        builder.button(text=name, callback_data=f"engc:object:{obj.id}")
+    builder.button(text="✍️ Ввести вручную", callback_data="engc:object:manual")
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"engc:object:p:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="engc:object:noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"engc:object:p:{page + 1}"))
+        builder.row(*nav)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def _eng_address_keyboard(addresses: list[str], page: int, total_pages: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for idx, addr in enumerate(addresses):
+        addr_text = addr[:50] + "…" if len(addr) > 50 else addr
+        builder.button(text=addr_text, callback_data=f"engc:address_idx:{idx}")
+    builder.button(text="✍️ Ввести вручную", callback_data="engc:address:manual")
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"engc:address:p:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="engc:address:noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"engc:address:p:{page + 1}"))
+        builder.row(*nav)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def _eng_contract_keyboard(contracts: list[Contract], page: int, total_pages: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for c in contracts:
+        text = c.number or f"Договор {c.id}"
+        if c.description:
+            text = f"{c.number} — {c.description[:30]}"
+        text = text[:40] + "…" if len(text) > 40 else text
+        builder.button(text=text, callback_data=f"engc:contract:{c.id}")
+    builder.button(text="✍️ Ввести вручную", callback_data="engc:contract:manual")
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"engc:contract:p:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="engc:contract:noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"engc:contract:p:{page + 1}"))
+        builder.row(*nav)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def _eng_defect_keyboard(defects: list[DefectType], page: int, total_pages: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for d in defects:
+        name = d.name[:40] + "…" if len(d.name) > 40 else d.name
+        builder.button(text=name, callback_data=f"engc:defect:{d.id}")
+    builder.button(text="✍️ Ввести вручную", callback_data="engc:defect:manual")
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"engc:defect:p:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="engc:defect:noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"engc:defect:p:{page + 1}"))
+        builder.row(*nav)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+async def _eng_prompt_inspection_calendar(message: Message) -> None:
+    await message.answer(
+        "Когда планируется комиссионный осмотр?\n"
+        "Выберите дату через календарь или отправьте «-», если дата пока не определена.",
+        reply_markup=build_calendar(ENG_CREATE_CALENDAR_PREFIX),
+    )
+
+
+async def _maybe_cancel_engineer_creation(message: Message, state: FSMContext) -> bool:
+    if (message.text or "").strip().lower() == "отмена":
+        await state.clear()
+        await message.answer("Создание заявки отменено.")
+        return True
+    return False
+
+
+# ──────────────────────────────────────────────────────────────────
+# Создание заявки инженером (полный флоу, аналог специалиста)
+# ──────────────────────────────────────────────────────────────────
+
+
 @router.message(F.text == "➕ Новая заявка")
 async def engineer_create_request(message: Message, state: FSMContext):
     async with async_session() as session:
@@ -299,16 +475,11 @@ async def engineer_create_request(message: Message, state: FSMContext):
             return
 
     await state.clear()
-    await state.update_data(
-        engineer_id=engineer.id,
-        contact_person=engineer.full_name,
-        contact_phone=engineer.phone,
-    )
+    await state.update_data(engineer_id=engineer.id)
     await state.set_state(EngineerCreateStates.title)
     await message.answer(
-        "Начинаем упрощённое создание заявки.\n"
-        "1️⃣ Введите короткий заголовок (до 120 символов).\n"
-        "Для отмены напишите «Отмена».",
+        "Введите короткий заголовок заявки (до 255 символов).\n"
+        "Для отмены напишите «Отмена»."
     )
 
 
@@ -320,97 +491,521 @@ async def engineer_create_title(message: Message, state: FSMContext):
     if not title:
         await message.answer("Заголовок не может быть пустым. Попробуйте снова.")
         return
-    if len(title) > 120:
-        await message.answer("Сократите заголовок до 120 символов.")
-        return
-
     await state.update_data(title=title)
-    await state.set_state(EngineerCreateStates.object_name)
-    await message.answer(
-        "2️⃣ Укажите объект или ЖК (например, «ЖК Сириус, корпус 3»).\n"
-        "Для отмены напишите «Отмена».",
-    )
-
-
-@router.message(StateFilter(EngineerCreateStates.object_name))
-async def engineer_create_object(message: Message, state: FSMContext):
-    if await _maybe_cancel_engineer_creation(message, state):
-        return
-    object_name = (message.text or "").strip()
-    if not object_name:
-        await message.answer("Название объекта обязательно. Введите его ещё раз.")
-        return
-
-    await state.update_data(object_name=object_name)
-    await state.set_state(EngineerCreateStates.address)
-    await message.answer(
-        "3️⃣ Введите адрес (улица, дом, подъезд). Без квартиры — её спросим отдельно.\n"
-        "Для отмены напишите «Отмена».",
-    )
-
-
-@router.message(StateFilter(EngineerCreateStates.address))
-async def engineer_create_address(message: Message, state: FSMContext):
-    if await _maybe_cancel_engineer_creation(message, state):
-        return
-    address = (message.text or "").strip()
-    if not address:
-        await message.answer("Адрес обязателен. Введите его ещё раз.")
-        return
-
-    await state.update_data(address=address)
-    await state.set_state(EngineerCreateStates.apartment)
-    await message.answer(
-        "4️⃣ Укажите квартиру/помещение или отправьте «-», если не нужно.\n"
-        "Для отмены напишите «Отмена».",
-    )
-
-
-@router.message(StateFilter(EngineerCreateStates.apartment))
-async def engineer_create_apartment(message: Message, state: FSMContext):
-    if await _maybe_cancel_engineer_creation(message, state):
-        return
-    apartment = (message.text or "").strip()
-    await state.update_data(apartment=None if apartment == "-" else apartment)
     await state.set_state(EngineerCreateStates.description)
-    await message.answer(
-        "5️⃣ Коротко опишите проблему или отправьте «-», если достаточно заголовка.\n"
-        "Для отмены напишите «Отмена».",
-    )
+    await message.answer("Опишите суть дефекта и требуемые работы.\nДля отмены напишите «Отмена».")
 
 
 @router.message(StateFilter(EngineerCreateStates.description))
 async def engineer_create_description(message: Message, state: FSMContext):
     if await _maybe_cancel_engineer_creation(message, state):
         return
-    description = (message.text or "").strip()
-    await state.update_data(description=None if description == "-" else description)
-    await state.set_state(EngineerCreateStates.phone)
+    await state.update_data(description=(message.text or "").strip())
+    async with async_session() as session:
+        objects, page, total_pages = await _eng_get_objects_page(session, page=0)
+    await state.set_state(EngineerCreateStates.object_name)
+    await state.update_data(engc_object_page=0)
+    if objects:
+        await message.answer(
+            "Выберите ЖК из списка или введите вручную:",
+            reply_markup=_eng_object_keyboard(objects, page, total_pages),
+        )
+    else:
+        await message.answer("Укажите объект (например, ЖК «Север», корпус 3).")
+
+
+# --- object_name state ---
+
+@router.callback_query(StateFilter(EngineerCreateStates.object_name), F.data == "engc:object:noop")
+async def engc_object_noop(callback: CallbackQuery):
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(EngineerCreateStates.object_name), F.data.startswith("engc:object:p:"))
+async def engc_object_page(callback: CallbackQuery, state: FSMContext):
+    try:
+        page = int(callback.data.split(":")[3])
+    except (IndexError, ValueError):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        objects, cur_page, total_pages = await _eng_get_objects_page(session, page=page)
+    await state.update_data(engc_object_page=cur_page)
+    if objects:
+        await callback.message.edit_reply_markup(reply_markup=_eng_object_keyboard(objects, cur_page, total_pages))
+    await callback.answer()
+
+
+async def _engc_handle_object_selection(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data == "engc:object:manual":
+        await state.set_state(EngineerCreateStates.object_name)
+        await callback.message.edit_reply_markup()
+        await callback.message.answer("Укажите объект (например, ЖК «Север», корпус 3).")
+        await callback.answer()
+        return
+    if callback.data.startswith("engc:object:"):
+        try:
+            object_id = int(callback.data.split(":")[2])
+        except (ValueError, IndexError):
+            await callback.answer("Ошибка выбора ЖК.", show_alert=True)
+            return
+        async with async_session() as session:
+            obj = await session.get(Object, object_id)
+            if not obj:
+                await callback.answer("Объект не найден.", show_alert=True)
+                return
+            object_name = obj.name
+            await state.update_data(object_name=object_name)
+            await callback.message.edit_text(f"ЖК: {object_name}")
+            addresses, addr_page, addr_total = await _eng_get_addresses_page(session, object_name=object_name, page=0)
+        await state.update_data(engc_saved_addresses=addresses, engc_address_page=0)
+        if addresses:
+            await callback.message.answer(
+                "Выберите адрес из списка или введите вручную:",
+                reply_markup=_eng_address_keyboard(addresses, addr_page, addr_total),
+            )
+        else:
+            await state.set_state(EngineerCreateStates.address)
+            await callback.message.answer("Укажите адрес объекта.")
+        await callback.answer()
+        return
+    await callback.answer("Ошибка выбора ЖК.", show_alert=True)
+
+
+@router.callback_query(StateFilter(EngineerCreateStates.description), F.data.startswith("engc:object"))
+async def engc_object_choice_from_desc(callback: CallbackQuery, state: FSMContext):
+    await _engc_handle_object_selection(callback, state)
+
+
+@router.callback_query(StateFilter(EngineerCreateStates.object_name), F.data.startswith("engc:object"))
+async def engc_object_choice(callback: CallbackQuery, state: FSMContext):
+    await _engc_handle_object_selection(callback, state)
+
+
+@router.message(StateFilter(EngineerCreateStates.object_name))
+async def engc_object_manual(message: Message, state: FSMContext):
+    if await _maybe_cancel_engineer_creation(message, state):
+        return
+    object_name = (message.text or "").strip()
+    if not object_name:
+        await message.answer("Название объекта не может быть пустым.")
+        return
+    async with async_session() as session:
+        try:
+            await RequestService._get_or_create_object(session, object_name, None)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+        addresses, addr_page, addr_total = await _eng_get_addresses_page(session, object_name=object_name, page=0)
+    await state.update_data(object_name=object_name, engc_saved_addresses=addresses, engc_address_page=0)
+    if addresses:
+        await message.answer(
+            f"Объект «{object_name}» сохранён.\n\nВыберите адрес из списка или введите вручную:",
+            reply_markup=_eng_address_keyboard(addresses, addr_page, addr_total),
+        )
+    else:
+        await state.set_state(EngineerCreateStates.address)
+        await message.answer(f"Объект «{object_name}» сохранён.\n\nУкажите адрес объекта.")
+
+
+# --- address selection callbacks (still in object_name state) ---
+
+@router.callback_query(StateFilter(EngineerCreateStates.object_name), F.data == "engc:address:noop")
+async def engc_address_noop(callback: CallbackQuery):
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(EngineerCreateStates.object_name), F.data.startswith("engc:address:p:"))
+async def engc_address_page(callback: CallbackQuery, state: FSMContext):
+    try:
+        page = int(callback.data.split(":")[3])
+    except (IndexError, ValueError):
+        await callback.answer()
+        return
+    data = await state.get_data()
+    object_name = data.get("object_name")
+    async with async_session() as session:
+        addresses, cur_page, total_pages = await _eng_get_addresses_page(session, object_name=object_name, page=page)
+    await state.update_data(engc_saved_addresses=addresses, engc_address_page=cur_page)
+    if addresses:
+        await callback.message.edit_reply_markup(reply_markup=_eng_address_keyboard(addresses, cur_page, total_pages))
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(EngineerCreateStates.object_name), F.data.startswith("engc:address"))
+async def engc_address_choice(callback: CallbackQuery, state: FSMContext):
+    if callback.data == "engc:address:manual":
+        await state.set_state(EngineerCreateStates.address)
+        await callback.message.edit_reply_markup()
+        await callback.message.answer("Укажите адрес объекта.")
+        await callback.answer()
+        return
+    if callback.data.startswith("engc:address_idx:"):
+        data = await state.get_data()
+        saved = data.get("engc_saved_addresses", [])
+        try:
+            idx = int(callback.data.split(":")[2])
+            if 0 <= idx < len(saved):
+                address = saved[idx]
+                await state.update_data(address=address, engc_saved_addresses=None)
+                await state.set_state(EngineerCreateStates.apartment)
+                await callback.message.edit_text(f"Адрес: {address}")
+                await callback.message.answer("Укажите номер квартиры (или «-», если не применимо).")
+                await callback.answer()
+                return
+        except (ValueError, IndexError):
+            pass
+    await callback.answer("Ошибка выбора адреса.", show_alert=True)
+
+
+@router.message(StateFilter(EngineerCreateStates.address))
+async def engc_address_manual(message: Message, state: FSMContext):
+    if await _maybe_cancel_engineer_creation(message, state):
+        return
+    address = (message.text or "").strip()
+    if not address:
+        await message.answer("Адрес обязателен. Введите его ещё раз.")
+        return
+    await state.update_data(address=address)
+    await state.set_state(EngineerCreateStates.apartment)
+    await message.answer("Укажите номер квартиры (или «-», если не применимо).")
+
+
+@router.message(StateFilter(EngineerCreateStates.apartment))
+async def engc_apartment(message: Message, state: FSMContext):
+    if await _maybe_cancel_engineer_creation(message, state):
+        return
+    apartment = (message.text or "").strip()
+    await state.update_data(apartment=None if apartment == "-" else apartment)
+    await state.set_state(EngineerCreateStates.contact_person)
+    await message.answer("Контактное лицо на объекте (ФИО).")
+
+
+@router.message(StateFilter(EngineerCreateStates.contact_person))
+async def engc_contact_person(message: Message, state: FSMContext):
+    if await _maybe_cancel_engineer_creation(message, state):
+        return
+    await state.update_data(contact_person=(message.text or "").strip())
+    await state.set_state(EngineerCreateStates.contact_phone)
+    await message.answer("Телефон контактного лица.")
+
+
+@router.message(StateFilter(EngineerCreateStates.contact_phone))
+async def engc_contact_phone(message: Message, state: FSMContext):
+    if await _maybe_cancel_engineer_creation(message, state):
+        return
+    phone = (message.text or "").strip()
+    if len(phone) < 6:
+        await message.answer("Номер слишком короткий. Введите номер полностью.")
+        return
+    await state.update_data(contact_phone=phone)
+    async with async_session() as session:
+        contracts, page, total_pages = await _eng_get_contracts_page(session, page=0)
+    await state.set_state(EngineerCreateStates.contract_number)
+    await state.update_data(engc_contract_page=0)
+    if contracts:
+        await message.answer(
+            "Выберите номер договора из списка или введите вручную.\nЕсли договора нет — отправьте «-».",
+            reply_markup=_eng_contract_keyboard(contracts, page, total_pages),
+        )
+    else:
+        await message.answer("Номер договора (если нет — отправьте «-»).")
+
+
+# --- contract_number state ---
+
+@router.callback_query(StateFilter(EngineerCreateStates.contract_number), F.data == "engc:contract:noop")
+async def engc_contract_noop(callback: CallbackQuery):
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(EngineerCreateStates.contract_number), F.data.startswith("engc:contract:p:"))
+async def engc_contract_page(callback: CallbackQuery, state: FSMContext):
+    try:
+        page = int(callback.data.split(":")[3])
+    except (IndexError, ValueError):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        contracts, cur_page, total_pages = await _eng_get_contracts_page(session, page=page)
+    await state.update_data(engc_contract_page=cur_page)
+    if contracts:
+        await callback.message.edit_reply_markup(reply_markup=_eng_contract_keyboard(contracts, cur_page, total_pages))
+    await callback.answer()
+
+
+async def _engc_goto_defect(message_or_cb_message, state: FSMContext) -> None:
+    async with async_session() as session:
+        defects, page, total_pages = await _eng_get_defect_types_page(session, page=0)
+    await state.set_state(EngineerCreateStates.defect_type)
+    await state.update_data(engc_defect_page=0)
+    if defects:
+        await message_or_cb_message.answer(
+            "Выберите тип дефекта из списка или введите свой текстом.",
+            reply_markup=_eng_defect_keyboard(defects, page, total_pages),
+        )
+    else:
+        await message_or_cb_message.answer("Тип дефекта (например, «Трещины в стене»).")
+
+
+@router.callback_query(StateFilter(EngineerCreateStates.contract_number), F.data.startswith("engc:contract:"))
+async def engc_contract_choice(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split(":")
+    contract_id_str = parts[2] if len(parts) >= 3 else ""
+    if contract_id_str == "manual":
+        await callback.message.edit_reply_markup()
+        await callback.message.answer("Введите номер договора (если нет — отправьте «-»).")
+        await callback.answer()
+        return
+    try:
+        contract_id = int(contract_id_str)
+    except ValueError:
+        await callback.answer("Некорректный договор.", show_alert=True)
+        return
+    async with async_session() as session:
+        contract = await session.get(Contract, contract_id)
+    if not contract:
+        await callback.answer("Договор не найден. Введите вручную.", show_alert=True)
+        return
+    await state.update_data(contract_number=contract.number)
+    await callback.message.edit_text(f"Договор: {contract.number}")
+    await _engc_goto_defect(callback.message, state)
+    await callback.answer()
+
+
+@router.message(StateFilter(EngineerCreateStates.contract_number))
+async def engc_contract_manual(message: Message, state: FSMContext):
+    if await _maybe_cancel_engineer_creation(message, state):
+        return
+    contract = (message.text or "").strip()
+    contract_number = None if contract == "-" else contract or None
+    if contract_number:
+        async with async_session() as session:
+            try:
+                await RequestService._get_or_create_contract(session, contract_number, None)
+                await session.commit()
+            except Exception:
+                await session.rollback()
+    await state.update_data(contract_number=contract_number)
+    await _engc_goto_defect(message, state)
+
+
+# --- defect_type state ---
+
+@router.callback_query(StateFilter(EngineerCreateStates.defect_type), F.data == "engc:defect:noop")
+async def engc_defect_noop(callback: CallbackQuery):
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(EngineerCreateStates.defect_type), F.data.startswith("engc:defect:p:"))
+async def engc_defect_page(callback: CallbackQuery, state: FSMContext):
+    try:
+        page = int(callback.data.split(":")[3])
+    except (IndexError, ValueError):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        defects, cur_page, total_pages = await _eng_get_defect_types_page(session, page=page)
+    await state.update_data(engc_defect_page=cur_page)
+    if defects:
+        await callback.message.edit_reply_markup(reply_markup=_eng_defect_keyboard(defects, cur_page, total_pages))
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(EngineerCreateStates.defect_type), F.data.startswith("engc:defect:"))
+async def engc_defect_choice(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split(":")
+    type_id = parts[2] if len(parts) >= 3 else ""
+    if type_id in {"manual", "noop", "p"}:
+        await callback.answer("Введите тип дефекта сообщением." if type_id == "manual" else None)
+        return
+    try:
+        defect_type_id = int(type_id)
+    except ValueError:
+        await callback.answer()
+        return
+    async with async_session() as session:
+        defect = await session.scalar(select(DefectType).where(DefectType.id == defect_type_id))
+    if not defect:
+        await callback.answer("Тип не найден. Введите вручную.", show_alert=True)
+        return
+    await state.update_data(defect_type=defect.name)
+    await state.set_state(EngineerCreateStates.inspection_datetime)
+    await callback.message.edit_text(f"Тип дефекта: {defect.name}")
+    await _eng_prompt_inspection_calendar(callback.message)
+    await callback.answer()
+
+
+@router.message(StateFilter(EngineerCreateStates.defect_type))
+async def engc_defect_manual(message: Message, state: FSMContext):
+    if await _maybe_cancel_engineer_creation(message, state):
+        return
+    defect = (message.text or "").strip()
+    if defect == "-":
+        await state.update_data(defect_type=None)
+        await state.set_state(EngineerCreateStates.inspection_datetime)
+        await _eng_prompt_inspection_calendar(message)
+        return
+    if not defect:
+        await message.answer("Введите тип дефекта текстом или выберите из списка.")
+        return
+    async with async_session() as session:
+        try:
+            await RequestService._get_or_create_defect_type(session, defect)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+    await state.update_data(defect_type=defect)
+    await message.answer(f"Тип дефекта «{defect}» сохранён.")
+    await state.set_state(EngineerCreateStates.inspection_datetime)
+    await _eng_prompt_inspection_calendar(message)
+
+
+# --- inspection_datetime state ---
+
+@router.message(StateFilter(EngineerCreateStates.inspection_datetime))
+async def engc_inspection_datetime_text(message: Message, state: FSMContext):
+    if await _maybe_cancel_engineer_creation(message, state):
+        return
+    if (message.text or "").strip() == "-":
+        await state.update_data(inspection_datetime=None, engc_inspection_date=None)
+        await state.set_state(EngineerCreateStates.inspection_location)
+        await message.answer("Место осмотра (если отличается от адреса). Если совпадает — отправьте «-».")
+        return
     await message.answer(
-        "6️⃣ Оставьте телефон для связи или «-», чтобы использовать номер из профиля.\n"
-        "Для отмены напишите «Отмена».",
+        "Дата выбирается через календарь. Нажмите на нужный день или отправьте «-», если дата неизвестна."
     )
 
 
-@router.message(StateFilter(EngineerCreateStates.phone))
-async def engineer_create_phone(message: Message, state: FSMContext):
+@router.callback_query(
+    StateFilter(EngineerCreateStates.inspection_datetime),
+    F.data.startswith(f"cal:{ENG_CREATE_CALENDAR_PREFIX}:"),
+)
+async def engc_calendar_callback(callback: CallbackQuery, state: FSMContext):
+    payload = parse_calendar_callback(callback.data)
+    if not payload:
+        await callback.answer()
+        return
+    if payload.action in {"prev", "next"}:
+        new_year, new_month = shift_month(payload.year, payload.month, payload.action)
+        await callback.message.edit_reply_markup(
+            reply_markup=build_calendar(ENG_CREATE_CALENDAR_PREFIX, year=new_year, month=new_month)
+        )
+        await callback.answer()
+        return
+    if payload.action == "day" and payload.day:
+        selected = date(payload.year, payload.month, payload.day)
+        await state.update_data(engc_inspection_date=selected.isoformat(), inspection_datetime=None)
+        await state.set_state(EngineerCreateStates.inspection_time)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await callback.message.answer(
+            f"Дата осмотра: {selected.strftime('%d.%m.%Y')}.\n"
+            "Введите время в формате ЧЧ:ММ или отправьте «-», если время пока неизвестно."
+        )
+        await callback.answer(f"Выбрано {selected.strftime('%d.%m.%Y')}")
+        return
+    await callback.answer()
+
+
+# --- inspection_time state ---
+
+@router.message(StateFilter(EngineerCreateStates.inspection_time))
+async def engc_inspection_time(message: Message, state: FSMContext):
     if await _maybe_cancel_engineer_creation(message, state):
         return
-    phone_text = (message.text or "").strip()
-    data = await state.get_data()
-
-    phone_value = phone_text
-    if phone_text == "-":
-        phone_value = data.get("contact_phone")
-        if not phone_value:
-            await message.answer("В профиле нет телефона. Введите номер вручную.")
-            return
-    if not phone_value:
-        await message.answer("Телефон обязателен. Введите его ещё раз.")
+    text = (message.text or "").strip()
+    if text == "-":
+        await state.update_data(inspection_datetime=None, engc_inspection_date=None)
+        await state.set_state(EngineerCreateStates.inspection_location)
+        await message.answer("Место осмотра (если отличается от адреса). Если совпадает — отправьте «-».")
         return
+    try:
+        time_value = datetime.strptime(text, "%H:%M").time()
+    except ValueError:
+        await message.answer("Не удалось распознать время. Используйте формат ЧЧ:ММ.")
+        return
+    data = await state.get_data()
+    date_text = data.get("engc_inspection_date")
+    if not date_text:
+        await message.answer("Сначала выберите дату через календарь.")
+        await state.set_state(EngineerCreateStates.inspection_datetime)
+        await _eng_prompt_inspection_calendar(message)
+        return
+    selected_date = date.fromisoformat(date_text)
+    inspection_dt = combine_moscow(selected_date, time_value)
+    await state.update_data(inspection_datetime=inspection_dt, engc_inspection_date=None)
+    await state.set_state(EngineerCreateStates.inspection_location)
+    await message.answer("Место осмотра (если отличается от адреса). Если совпадает — отправьте «-».")
 
-    await state.update_data(contact_phone=phone_value)
-    await _send_engineer_creation_summary(message, state)
+
+# --- inspection_location state ---
+
+@router.message(StateFilter(EngineerCreateStates.inspection_location))
+async def engc_inspection_location(message: Message, state: FSMContext):
+    if await _maybe_cancel_engineer_creation(message, state):
+        return
+    location = (message.text or "").strip()
+    await state.update_data(inspection_location=None if location == "-" else location)
+    await state.set_state(EngineerCreateStates.letter)
+    await message.answer(
+        "Прикрепите файл обращения (письмо) в формате PDF/документа или отправьте «-», если письма нет.\n"
+        "Для отмены напишите «Отмена»."
+    )
+
+
+# --- letter state ---
+
+@router.message(StateFilter(EngineerCreateStates.letter), F.document)
+async def engc_letter_document(message: Message, state: FSMContext):
+    doc = message.document
+    await state.update_data(letter_file_id=doc.file_id, letter_file_name=doc.file_name)
+    await _engc_send_summary(message, state)
+
+
+@router.message(StateFilter(EngineerCreateStates.letter))
+async def engc_letter_text(message: Message, state: FSMContext):
+    if await _maybe_cancel_engineer_creation(message, state):
+        return
+    text = (message.text or "").strip().lower()
+    if text in {"-", "нет", "без письма"}:
+        await state.update_data(letter_file_id=None, letter_file_name=None)
+        await _engc_send_summary(message, state)
+        return
+    await message.answer("Прикрепите файл обращения (PDF) или отправьте «-», если письма нет.")
+
+
+# --- confirmation state ---
+
+async def _engc_send_summary(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    inspection_dt = data.get("inspection_datetime")
+    inspection_text = format_moscow(inspection_dt) if inspection_dt else "не указан"
+    letter_text = "приложено" if data.get("letter_file_id") else "нет"
+    apartment_text = data.get("apartment") or "—"
+    summary = (
+        "Проверьте данные:\n"
+        f"🔹 Заголовок: {data.get('title')}\n"
+        f"🔹 Описание: {data.get('description') or '—'}\n"
+        f"🔹 Объект: {data.get('object_name')}\n"
+        f"🔹 Адрес: {data.get('address')}\n"
+        f"🔹 Квартира: {apartment_text}\n"
+        f"🔹 Контакт: {data.get('contact_person')} / {data.get('contact_phone')}\n"
+        f"🔹 Договор: {data.get('contract_number') or '—'}\n"
+        f"🔹 Тип дефекта: {data.get('defect_type') or '—'}\n"
+        f"🔹 Осмотр: {inspection_text}\n"
+        f"🔹 Место осмотра: {data.get('inspection_location') or 'адрес объекта'}\n"
+        f"🔹 Письмо: {letter_text}\n\n"
+        "Нажмите кнопку ниже для подтверждения или отмены создания заявки."
+    )
+    await state.set_state(EngineerCreateStates.confirmation)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Подтвердить", callback_data="eng:confirm_create")
+    builder.button(text="❌ Отменить", callback_data="eng:cancel_create")
+    builder.adjust(1)
+    await message.answer(summary, reply_markup=builder.as_markup())
 
 
 @router.callback_query(F.data == "eng:confirm_create", StateFilter(EngineerCreateStates.confirmation))
@@ -424,20 +1019,53 @@ async def engineer_create_confirm(callback: CallbackQuery, state: FSMContext):
             await callback.answer()
             return
 
-        create_data = RequestCreateData(
-            title=data["title"],
-            description=data.get("description") or data["title"],
-            object_name=data["object_name"],
-            address=data["address"],
-            apartment=data.get("apartment"),
-            contact_person=data.get("contact_person") or engineer.full_name,
-            contact_phone=data["contact_phone"],
-            specialist_id=engineer.id,
-            engineer_id=engineer.id,
-            remedy_term_days=14,
-        )
-        request = await RequestService.create_request(session, create_data)
-        await session.commit()
+        from app.infrastructure.db.models.roles.engineer import Engineer as EngineerProfile
+        if engineer.role != UserRole.ENGINEER:
+            eng_profile = await session.scalar(select(EngineerProfile).where(EngineerProfile.user_id == engineer.id))
+            if not eng_profile:
+                session.add(EngineerProfile(user_id=engineer.id))
+                await session.flush()
+
+        try:
+            create_data = RequestCreateData(
+                title=data["title"],
+                description=data.get("description") or data["title"],
+                object_name=data["object_name"],
+                address=data["address"],
+                apartment=data.get("apartment"),
+                contact_person=data.get("contact_person") or engineer.full_name,
+                contact_phone=data.get("contact_phone") or engineer.phone or "",
+                contract_number=data.get("contract_number"),
+                defect_type_name=data.get("defect_type"),
+                inspection_datetime=data.get("inspection_datetime"),
+                inspection_location=data.get("inspection_location"),
+                specialist_id=engineer.id,
+                engineer_id=engineer.id,
+                due_at=None,
+            )
+            request = await RequestService.create_request(session, create_data)
+
+            letter_file_id = data.get("letter_file_id")
+            if letter_file_id:
+                session.add(
+                    Act(
+                        request_id=request.id,
+                        type=ActType.LETTER,
+                        file_id=letter_file_id,
+                        file_name=data.get("letter_file_name"),
+                        uploaded_by_id=engineer.id,
+                    )
+                )
+            await session.commit()
+        except Exception as e:
+            await session.rollback()
+            await callback.message.answer(
+                f"❌ Ошибка при создании заявки: {html.escape(str(e))}\n"
+                "Попробуйте создать заявку заново."
+            )
+            await state.clear()
+            await callback.answer()
+            return
 
     label = format_request_label(request)
     await callback.message.answer(
@@ -453,45 +1081,6 @@ async def engineer_create_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.answer("Создание заявки отменено.")
     await callback.answer()
-
-
-async def _maybe_cancel_engineer_creation(message: Message, state: FSMContext) -> bool:
-    text = (message.text or "").strip().lower()
-    if text == "отмена":
-        await state.clear()
-        await message.answer("Создание заявки отменено.")
-        return True
-    return False
-
-
-async def _send_engineer_creation_summary(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    summary = _build_engineer_creation_summary(data)
-    await state.set_state(EngineerCreateStates.confirmation)
-    
-    # Создаем кнопки для подтверждения
-    builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Подтвердить", callback_data="eng:confirm_create")
-    builder.button(text="❌ Отменить", callback_data="eng:cancel_create")
-    builder.adjust(1)
-    
-    await message.answer(summary, reply_markup=builder.as_markup())
-
-
-def _build_engineer_creation_summary(data: dict) -> str:
-    apartment = data.get("apartment") or "—"
-    description = data.get("description") or data.get("title")
-    phone = data.get("contact_phone") or "—"
-    return (
-        "Проверьте данные заявки:\n"
-        f"• Заголовок: {data.get('title')}\n"
-        f"• Объект: {data.get('object_name')}\n"
-        f"• Адрес: {data.get('address')}\n"
-        f"• Квартира: {apartment}\n"
-        f"• Описание: {description}\n"
-        f"• Контакт: {data.get('contact_person')} / {phone}\n\n"
-        "Нажмите кнопку ниже для подтверждения или отмены создания заявки."
-    )
 
 
 async def _prompt_schedule_calendar(message: Message):
